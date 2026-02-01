@@ -17,14 +17,9 @@ type NginxLogEntry struct {
 	Method        string
 	Path          string
 	Protocol      string
-	Status        int
-	BodyBytesSent int
-	Referer       string
-	UserAgent     string
-}
-
 // Common/Combined Log Format Regex
 // IP - User [Time] "Method Path Protocol" Status Bytes "Referer" "UserAgent"
+// Note: Path will include query string if present in the log (e.g., /index.html?foo=bar)
 var nginxRegex = regexp.MustCompile(`^(\S+) - (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+) "([^"]*)" "([^"]*)"`)
 
 // ParseNginxLine parses a single line of Nginx access log
