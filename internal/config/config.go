@@ -1,0 +1,38 @@
+package config
+
+import (
+	"os"
+	"strconv"
+)
+
+type Config struct {
+	NginxAccessLogPath string
+	NginxErrorLogPath  string
+	SSHAuthLogPath     string
+	Port               int
+}
+
+func Load() *Config {
+	return &Config{
+		NginxAccessLogPath: getEnv("NGINX_ACCESS_LOG_PATH", "/var/log/nginx/access.log"),
+		NginxErrorLogPath:  getEnv("NGINX_ERROR_LOG_PATH", "/var/log/nginx/error.log"),
+		SSHAuthLogPath:     getEnv("SSH_AUTH_LOG_PATH", "/var/log/auth.log"),
+		Port:               getEnvInt("PORT", 9102),
+	}
+}
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if value, ok := os.LookupEnv(key); ok {
+		if i, err := strconv.Atoi(value); err == nil {
+			return i
+		}
+	}
+	return fallback
+}

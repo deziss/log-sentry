@@ -1,0 +1,12 @@
+# Binaries
+log-sentry
+
+# Logs
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
