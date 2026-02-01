@@ -14,8 +14,9 @@ type LogCollector struct {
 	NginxResponseBytes *prometheus.CounterVec
 
 	// SSH Metrics
-	SSHLoginAttempts *prometheus.CounterVec
-	SSHDisconnects   *prometheus.CounterVec
+	SSHLoginAttempts  *prometheus.CounterVec
+	SSHDisconnects    *prometheus.CounterVec
+	SSHActiveSessions prometheus.Gauge
 }
 
 func NewLogCollector() *LogCollector {
@@ -55,6 +56,12 @@ func NewLogCollector() *LogCollector {
 			},
 			[]string{},
 		),
+		SSHActiveSessions: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "ssh_active_sessions",
+				Help: "Estimated number of active SSH sessions.",
+			},
+		),
 	}
 }
 
@@ -65,6 +72,7 @@ func (c *LogCollector) Register(reg prometheus.Registerer) {
 		c.NginxResponseBytes,
 		c.SSHLoginAttempts,
 		c.SSHDisconnects,
+		c.SSHActiveSessions,
 	)
 }
 
@@ -90,9 +98,11 @@ func (c *LogCollector) ProcessNginx(entry *parser.NginxLogEntry) {
 func (c *LogCollector) ProcessSSH(entry *parser.SSHLogEntry) {
 	if entry.Type == parser.SSHLoginSuccess {
 		c.SSHLoginAttempts.WithLabelValues(entry.User, entry.IP, "success", entry.AuthMethod).Inc()
+		c.SSHActiveSessions.Inc()
 	} else if entry.Type == parser.SSHLoginFailed {
 		c.SSHLoginAttempts.WithLabelValues(entry.User, entry.IP, "failed", entry.AuthMethod).Inc()
 	} else if entry.Type == parser.SSHDisconnect {
 		c.SSHDisconnects.WithLabelValues().Inc()
+		c.SSHActiveSessions.Dec()
 	}
 }
