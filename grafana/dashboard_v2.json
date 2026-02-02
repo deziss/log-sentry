@@ -1,0 +1,217 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Security Heads-Up Display (Events Last 1h)",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["mean"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "8.3.3",
+      "targets": [{ "expr": "sum(increase(web_attack_detected_total[1h]))", "refId": "A" }],
+      "title": "Total Attacks",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto" },
+      "targets": [{ "expr": "sum(increase(web_anomaly_detected_total[1h]))", "refId": "A" }],
+      "title": "Anomalies",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 10,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto" },
+      "targets": [{ "expr": "sum(increase(sensitive_file_changed_total[1h]))", "refId": "A" }],
+      "title": "Recent File Changes",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 11,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto" },
+      "targets": [{ "expr": "sum(security_unexpected_process_active)", "refId": "A" }],
+      "title": "Bad Processes Active",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 4,
+      "targets": [{ "expr": "sum(ssh_active_sessions)", "refId": "A" }],
+      "title": "SSH Sessions",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 15 }, { "color": "green", "value": 30 }] } }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "id": 12,
+      "targets": [{ "expr": "min(ssl_cert_expiry_days)", "refId": "A" }],
+      "title": "Min SSL Days",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "panels": [],
+      "title": "Web Threat Intelligence",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 20,
+      "targets": [{ "expr": "sum(increase(web_attack_detected_total[5m])) by (severity)", "legendFormat": "{{severity}}", "refId": "A" }],
+      "title": "Attacks Over Time (by Severity)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "pieType": "pie" },
+      "targets": [{ "expr": "sum(increase(web_attack_detected_total[24h])) by (type)", "legendFormat": "{{type}}", "refId": "A" }],
+      "title": "Attack Mix (24h)",
+      "type": "piechart"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
+      "id": 21,
+      "targets": [{ "expr": "topk(10, sum(increase(web_attack_detected_total[24h])) by (source_ip, network_type))", "format": "table", "refId": "A" }],
+      "title": "Top Attackers (IP & NetType)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "panels": [],
+      "title": "Traffic Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 30,
+      "targets": [{ "expr": "sum(rate(http_response_bytes_total[5m])) by (service)", "legendFormat": "{{service}}", "refId": "A" }],
+      "title": "Outbound Bandwidth (Bytes/sec)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 15 },
+      "id": 6,
+      "targets": [{ "expr": "sum(rate(http_requests_total[5m])) by (network_type)", "legendFormat": "{{network_type}}", "refId": "A" }],
+      "title": "Internal vs External Traffic",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 15 },
+      "id": 31,
+      "targets": [{ "expr": "topk(10, sum(increase(web_requests{status=\"404\"}[1h])) by (path))", "format": "table", "refId": "A" }],
+      "title": "Top 404 Paths (Scanning Targets)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 103,
+      "panels": [],
+      "title": "System Health & Compliance",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 24 },
+      "id": 40,
+      "targets": [{ "expr": "ssl_cert_expiry_days", "format": "table", "refId": "A" }],
+      "title": "SSL Certificate Status",
+      "type": "table"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 24 },
+      "id": 7,
+      "title": "Data Exfiltration Alerts",
+      "type": "table",
+      "targets": [{ "expr": "web_attack_detected_total{type=~\"Data Exfiltration.*\"} > 0", "format": "table", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 24 },
+      "id": 8,
+      "title": "Suspicious Processes",
+      "type": "table",
+      "targets": [{ "expr": "security_unexpected_process_active > 0", "format": "table", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 30 },
+      "id": 41,
+      "targets": [
+        { "expr": "sum(increase(ssh_login_attempts_total{status=\"failed\"}[5m]))", "legendFormat": "Failed SSH Logins", "refId": "A" },
+        { "expr": "sum(increase(ssh_login_attempts_total{status=\"success\"}[5m]))", "legendFormat": "Successful SSH Logins", "refId": "B" }
+      ],
+      "title": "SSH Activity (Audit Trail)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 34,
+  "style": "dark",
+  "tags": ["security", "log-sentry", "v2.2"],
+  "templating": { "list": [] },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Log Sentry V2.2 - Master Security Dashboard",
+  "version": 1
+}

@@ -5,14 +5,25 @@ services:
     build: .
     ports:
       - "9102:9102"
+      - "5140:5140/udp"
+      - "5140:5140/tcp"
     volumes:
       # Mount host logs (adjust paths as needed or use dummy logs for testing)
-      # For testing, we might want to mount a local 'logs' dir we can write to
       - ./logs/nginx:/var/log/nginx
-      - ./logs/ssh:/var/log/ssh_logs # mapping to custom path to avoid permissions issues on host /var/log/auth.log
+      - ./logs/apache2:/var/log/apache2
+      - ./logs/caddy:/var/log/caddy
+      - ./logs/tomcat:/usr/local/tomcat/logs
+      - ./logs/traefik:/var/log/traefik
+      - ./logs/haproxy:/var/log/haproxy
+      - ./logs/envoy:/var/log/envoy
+      - ./logs/lighttpd:/var/log/lighttpd
+      - ./logs/ssh:/var/log/ssh_logs
+      # Mount /proc for Auto-Discovery
+      - /proc:/proc:ro
     environment:
+      # Manual overrides if auto-discovery fails or needs forcing
       - NGINX_ACCESS_LOG_PATH=/var/log/nginx/access.log
-      - NGINX_ERROR_LOG_PATH=/var/log/nginx/error.log
+      - APACHE_ACCESS_LOG_PATH=/var/log/apache2/access.log
       - SSH_AUTH_LOG_PATH=/var/log/ssh_logs/auth.log
       - PORT=9102
 

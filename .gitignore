@@ -10,3 +10,12 @@ logs/
 
 # OS
 .DS_Store
+
+# Test binaries
+nc
+traefik
+lighttpd
+envoy
+
+# Metrics snapshots
+metrics_*.txt

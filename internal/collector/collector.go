@@ -1,6 +1,8 @@
 package collector
 
 import (
+	"log-sentry/internal/analyzer"
+	"log-sentry/internal/anomaly"
 	"log-sentry/internal/parser"
 	"strconv"
 
@@ -8,10 +10,12 @@ import (
 )
 
 type LogCollector struct {
-	// Nginx Metrics
-	NginxRequests      *prometheus.CounterVec
-	NginxRequestBytes  *prometheus.CounterVec
-	NginxResponseBytes *prometheus.CounterVec
+	// Web Metrics (Generic for Nginx, Apache, etc.)
+	WebRequests      *prometheus.CounterVec
+	WebRequestBytes  *prometheus.CounterVec // often missing in standard logs
+	WebResponseBytes *prometheus.CounterVec
+	WebAttacks       *prometheus.CounterVec
+	WebAnomalies     *prometheus.CounterVec
 
 	// SSH Metrics
 	SSHLoginAttempts  *prometheus.CounterVec
@@ -21,26 +25,40 @@ type LogCollector struct {
 
 func NewLogCollector() *LogCollector {
 	return &LogCollector{
-		NginxRequests: prometheus.NewCounterVec(
+		WebRequests: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "nginx_http_requests_total",
-				Help: "Total number of Nginx HTTP requests.",
+				Name: "http_requests_total",
+				Help: "Total number of HTTP requests.",
 			},
-			[]string{"method", "status", "path", "remote_ip"},
+			[]string{"service", "method", "status", "path", "remote_ip", "network_type"},
 		),
-		NginxRequestBytes: prometheus.NewCounterVec(
+		WebRequestBytes: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "nginx_http_request_bytes_total",
-				Help: "Total number of bytes received by Nginx.",
+				Name: "http_request_bytes_total",
+				Help: "Total number of bytes received (estimated).",
 			},
-			[]string{"method", "remote_ip"},
+			[]string{"service", "method"},
 		),
-		NginxResponseBytes: prometheus.NewCounterVec(
+		WebResponseBytes: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "nginx_http_response_bytes_total",
-				Help: "Total number of bytes sent by Nginx.",
+				Name: "http_response_bytes_total",
+				Help: "Total number of bytes sent.",
 			},
-			[]string{"method", "remote_ip"},
+			[]string{"service", "method", "remote_ip"},
+		),
+		WebAttacks: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "web_attack_detected_total",
+				Help: "Total number of detected web attacks.",
+			},
+			[]string{"service", "type", "severity", "endpoint", "source_ip", "network_type"},
+		),
+		WebAnomalies: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "web_anomaly_detected_total",
+				Help: "Total number of detected traffic anomalies (e.g., 404 floods).",
+			},
+			[]string{"service", "type", "source_ip"},
 		),
 		SSHLoginAttempts: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -67,32 +85,53 @@ func NewLogCollector() *LogCollector {
 
 func (c *LogCollector) Register(reg prometheus.Registerer) {
 	reg.MustRegister(
-		c.NginxRequests,
-		c.NginxRequestBytes,
-		c.NginxResponseBytes,
+		c.WebRequests,
+		c.WebRequestBytes,
+		c.WebResponseBytes,
+		c.WebAttacks,
+		c.WebAnomalies,
 		c.SSHLoginAttempts,
 		c.SSHDisconnects,
 		c.SSHActiveSessions,
 	)
 }
 
-func (c *LogCollector) ProcessNginx(entry *parser.NginxLogEntry) {
+func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer.AttackResult, anomalyType anomaly.AnomalyType, networkType string) {
 	statusStr := strconv.Itoa(entry.Status)
 
-	c.NginxRequests.WithLabelValues(
+	c.WebRequests.WithLabelValues(
+		entry.Service,
 		entry.Method,
 		statusStr,
 		entry.Path,
 		entry.RemoteIP,
+		networkType,
 	).Inc()
 
-	// Bytes metrics - using RemoteIP to answer "by which IP"
-	// Note: We don't have request specific bytes in common log format usually (BodyBytesSent is response size)
-	// We'll track response bytes
-	c.NginxResponseBytes.WithLabelValues(
+	c.WebResponseBytes.WithLabelValues(
+		entry.Service,
 		entry.Method,
 		entry.RemoteIP,
 	).Add(float64(entry.BodyBytesSent))
+
+	if attack.Detected {
+		c.WebAttacks.WithLabelValues(
+			entry.Service,
+			attack.Type,
+			attack.Severity,
+			entry.Path,
+			entry.RemoteIP,
+			networkType,
+		).Inc()
+	}
+	
+	if anomalyType != "" {
+		c.WebAnomalies.WithLabelValues(
+			entry.Service,
+			string(anomalyType),
+			entry.RemoteIP,
+		).Inc()
+	}
 }
 
 func (c *LogCollector) ProcessSSH(entry *parser.SSHLogEntry) {
