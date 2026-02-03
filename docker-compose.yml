@@ -18,9 +18,11 @@ services:
       - ./logs/envoy:/var/log/envoy
       - ./logs/lighttpd:/var/log/lighttpd
       - ./logs/ssh:/var/log/ssh_logs
-      # Mount /proc for Auto-Discovery
-      - /proc:/proc:ro
+      - ./logs/ssh:/var/log/ssh_logs
+      # Mount /proc as /host/proc (ro) to avoid overwriting container's /proc
+      - /proc:/host/proc:ro
     environment:
+      - HOST_PROC=/host/proc
       # Manual overrides if auto-discovery fails or needs forcing
       - NGINX_ACCESS_LOG_PATH=/var/log/nginx/access.log
       - APACHE_ACCESS_LOG_PATH=/var/log/apache2/access.log

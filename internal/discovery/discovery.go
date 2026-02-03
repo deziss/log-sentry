@@ -19,8 +19,12 @@ type AutoDiscover struct {
 }
 
 func NewAutoDiscover() *AutoDiscover {
+	root := os.Getenv("HOST_PROC")
+	if root == "" {
+		root = "/proc"
+	}
 	return &AutoDiscover{
-		ProcRoot: "/proc",
+		ProcRoot: root,
 	}
 }
 
