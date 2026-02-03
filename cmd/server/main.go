@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	// 1. Load Configuration (Env vars still override)
+	// 1. Load Configuration
 	cfg := config.Load()
 	log.Printf("Starting Log Sentry V2 on port %d...", cfg.Port)
 
@@ -61,6 +61,13 @@ func main() {
 			return
 		}
 		log.Printf("Monitoring %s logs at: %s", name, path)
+
+		// Metric Initialization (Ensure they appear as 0 instead of missing)
+		// We initialize common vectors to ensure they show up in Prometheus output even if 0
+		coll.WebRequests.WithLabelValues(name, "GET", "200", "/", "unknown", "unknown").Add(0)
+		coll.WebRequestBytes.WithLabelValues(name, "GET").Add(0)
+		coll.WebResponseBytes.WithLabelValues(name, "GET", "unknown").Add(0)
+		
 		startWebMonitoring(name, path, p, wp)
 		monitoredCount++
 	}
@@ -91,19 +98,11 @@ func main() {
 			continue
 		}
 		
-		// Use discovered path, or fallback to config if env var set for this specific service?
-		// For now, auto-discovery takes precedence if it found a path, 
-		// but our current auto-discover just guesses defaults.
-		// We'll trust the guess for now.
 		monitorService(svc.Name, svc.LogPath, p)
 	}
 
-	// 4b. Explicit Config Fallbacks (if not discovered)
-	// If auto-discovery didn't find Nginx, but ENV is set:
+	// 4d. Explicit Config Fallbacks (if not discovered or forced)
 	if monitoredCount == 0 || cfg.NginxAccessLogPath != "" {
-		// Simple check: if we haven't monitored nginx yet, add it
-		// Real logic would be more complex deduplication.
-		// For verification, we Just Load Configured Paths as "manual" services
 		log.Println("Loading configured log paths...")
 		monitorService("nginx_manual", cfg.NginxAccessLogPath, &parser.NginxParser{})
 	}
@@ -119,13 +118,12 @@ func main() {
 	fim := monitor.NewFIM()
 	fim.Register(prometheus.DefaultRegisterer)
 	fim.AddPath("/etc/passwd") 
-	fim.AddPath(cfg.NginxAccessLogPath) // Just as an example watcher
+	fim.AddPath(cfg.NginxAccessLogPath)
 	fim.Start(30 * time.Second)
 
 	// Process Sentinel
 	procSent := monitor.NewProcessSentinel()
 	procSent.Register(prometheus.DefaultRegisterer)
-	// Add custom "bad" processes if needed, default list is used
 	procSent.Start(30 * time.Second)
 
 	// SSH Monitoring is distinct
@@ -137,6 +135,7 @@ func main() {
 	// 5. Start HTTP Server
 	http.Handle("/metrics", promhttp.Handler())
 	addr := fmt.Sprintf(":%d", cfg.Port)
+	log.Printf("Listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
