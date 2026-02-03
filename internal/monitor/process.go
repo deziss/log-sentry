@@ -64,8 +64,7 @@ func (p *ProcessSentinel) scan() {
 			}
 			
 			p.AlertMetric.WithLabelValues(badTerm, fmt.Sprintf("%d", pid), cmd).Set(1)
-			// Log it too
-			log.Printf("SECURITY ALERT: Suspicious process detected: %s (PID: %d) Cmd: %s", name, pid, cmd)
+			// Log removed to prevent spam (metric only)
 		}
 	}
 }
