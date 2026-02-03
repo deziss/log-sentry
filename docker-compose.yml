@@ -18,7 +18,7 @@ services:
       - ./logs/envoy:/var/log/envoy
       - ./logs/lighttpd:/var/log/lighttpd
       - ./logs/ssh:/var/log/ssh_logs
-      - ./logs/ssh:/var/log/ssh_logs
+
       # Mount /proc as /host/proc (ro) to avoid overwriting container's /proc
       - /proc:/host/proc:ro
     environment:

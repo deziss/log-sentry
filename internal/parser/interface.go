@@ -17,6 +17,7 @@ type GenericLogEntry struct {
 	Referer       string
 	UserAgent     string
 	Service       string // e.g. "nginx", "apache", "caddy"
+	Latency       float64 // Request processing time in seconds
 }
 
 // LogParser interface that all specific parsers must implement

@@ -10,9 +10,9 @@ import (
 // NginxParser implements LogParser interface
 type NginxParser struct{}
 
-// Common/Combined Log Format Regex
-// IP - User [Time] "Method Path Protocol" Status Bytes "Referer" "UserAgent"
-var nginxRegex = regexp.MustCompile(`^(\S+) - (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+) "([^"]*)" "([^"]*)"`)
+// Common/Combined Log Format Regex + Optional Latency
+// IP - User [Time] "Method Path Protocol" Status Bytes "Referer" "UserAgent" [Latency]
+var nginxRegex = regexp.MustCompile(`^(\S+) - (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+) "([^"]*)" "([^"]*)"(?:\s*([\d\.]+))?`)
 
 // Parse implements LogParser
 func (p *NginxParser) Parse(line string) (*GenericLogEntry, error) {
@@ -28,6 +28,11 @@ func (p *NginxParser) Parse(line string) (*GenericLogEntry, error) {
 	status, _ := strconv.Atoi(matches[7])
 	bytesSent, _ := strconv.Atoi(matches[8])
 
+	var latency float64
+	if len(matches) > 11 && matches[11] != "" {
+		latency, _ = strconv.ParseFloat(matches[11], 64)
+	}
+
 	return &GenericLogEntry{
 		Service:       "nginx",
 		RemoteIP:      matches[1],
@@ -40,5 +45,6 @@ func (p *NginxParser) Parse(line string) (*GenericLogEntry, error) {
 		BodyBytesSent: bytesSent,
 		Referer:       matches[9],
 		UserAgent:     matches[10],
+		Latency:       latency,
 	}, nil
 }

@@ -16,6 +16,7 @@ type LogCollector struct {
 	WebResponseBytes *prometheus.CounterVec
 	WebAttacks       *prometheus.CounterVec
 	WebAnomalies     *prometheus.CounterVec
+	WebLatency       *prometheus.HistogramVec // NEW: Latency Histogram
 
 	// SSH Metrics
 	SSHLoginAttempts  *prometheus.CounterVec
@@ -46,6 +47,14 @@ func NewLogCollector() *LogCollector {
 			},
 			[]string{"service", "method", "remote_ip"},
 		),
+		WebLatency: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "http_request_duration_seconds",
+				Help:    "Histogram of request processing time in seconds.",
+				Buckets: prometheus.DefBuckets, // .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10
+			},
+			[]string{"service", "method", "path"},
+		),
 		WebAttacks: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "web_attack_detected_total",
@@ -58,7 +67,7 @@ func NewLogCollector() *LogCollector {
 				Name: "web_anomaly_detected_total",
 				Help: "Total number of detected traffic anomalies (e.g., 404 floods).",
 			},
-			[]string{"service", "type", "source_ip"},
+			[]string{"service", "type", "source_ip", "log_sample"}, // Added log_sample
 		),
 		SSHLoginAttempts: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -88,6 +97,7 @@ func (c *LogCollector) Register(reg prometheus.Registerer) {
 		c.WebRequests,
 		c.WebRequestBytes,
 		c.WebResponseBytes,
+		c.WebLatency, // NEW
 		c.WebAttacks,
 		c.WebAnomalies,
 		c.SSHLoginAttempts,
@@ -108,11 +118,25 @@ func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer
 		networkType,
 	).Inc()
 
+	c.WebRequestBytes.WithLabelValues(
+		entry.Service,
+		entry.Method,
+	).Inc() // Using Inc() as a simple counter for now, request bytes is hard to know exactly without header parsing
+
 	c.WebResponseBytes.WithLabelValues(
 		entry.Service,
 		entry.Method,
 		entry.RemoteIP,
 	).Add(float64(entry.BodyBytesSent))
+
+	// Observe Latency if present
+	if entry.Latency > 0 {
+		c.WebLatency.WithLabelValues(
+			entry.Service,
+			entry.Method,
+			entry.Path,
+		).Observe(entry.Latency)
+	}
 
 	if attack.Detected {
 		c.WebAttacks.WithLabelValues(
@@ -126,10 +150,16 @@ func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer
 	}
 	
 	if anomalyType != "" {
+		// Log Sample logic: Reconstruct or use a placeholder if we don't pass raw line
+		// Since we don't have the raw line here, we'll construct a synthetic sample
+		// In a real impl, we'd pass the raw line. 
+		// For now, let's just log "Method Path -> Status"
+		logSample := entry.Method + " " + entry.Path + " -> " + statusStr
 		c.WebAnomalies.WithLabelValues(
 			entry.Service,
 			string(anomalyType),
 			entry.RemoteIP,
+			logSample,
 		).Inc()
 	}
 }

@@ -10,8 +10,8 @@ import (
 type ApacheParser struct{}
 
 // Apache Combined Log Format is very similar to Nginx default
-// %h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"
-var apacheRegex = regexp.MustCompile(`^(\S+) \S+ (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+|-) "([^"]*)" "([^"]*)"`)
+// %h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\" [Latency]
+var apacheRegex = regexp.MustCompile(`^(\S+) \S+ (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+|-) "([^"]*)" "([^"]*)"(?:\s*([\d\.]+))?`)
 
 func (p *ApacheParser) Parse(line string) (*GenericLogEntry, error) {
 	matches := apacheRegex.FindStringSubmatch(line)
@@ -29,6 +29,11 @@ func (p *ApacheParser) Parse(line string) (*GenericLogEntry, error) {
 		bytesSent, _ = strconv.Atoi(matches[8])
 	}
 
+	var latency float64
+	if len(matches) > 11 && matches[11] != "" {
+		latency, _ = strconv.ParseFloat(matches[11], 64)
+	}
+
 	return &GenericLogEntry{
 		Service:       "apache",
 		RemoteIP:      matches[1],
@@ -41,5 +46,6 @@ func (p *ApacheParser) Parse(line string) (*GenericLogEntry, error) {
 		BodyBytesSent: bytesSent,
 		Referer:       matches[9],
 		UserAgent:     matches[10],
+		Latency:       latency,
 	}, nil
 }

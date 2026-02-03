@@ -56,19 +56,29 @@ func (p *ProcessSentinel) scan() {
 			continue
 		}
 
-		for _, bad := range p.Blacklist {
-			// Simple substring match for "nmap" or "xmrig"
-			if strings.Contains(strings.ToLower(name), bad) {
-				pid := proc.Pid
-				cmd, _ := proc.Cmdline()
-				if len(cmd) > 50 {
-					cmd = cmd[:50] + "..."
-				}
-				
-				p.AlertMetric.WithLabelValues(bad, fmt.Sprintf("%d", pid), cmd).Set(1)
-				// Log it too
-				log.Printf("SECURITY ALERT: Suspicious process detected: %s (PID: %d) Cmd: %s", name, pid, cmd)
+		if badTerm, matched := p.isBlacklisted(name); matched {
+			pid := proc.Pid
+			cmd, _ := proc.Cmdline()
+			if len(cmd) > 50 {
+				cmd = cmd[:50] + "..."
 			}
+			
+			p.AlertMetric.WithLabelValues(badTerm, fmt.Sprintf("%d", pid), cmd).Set(1)
+			// Log it too
+			log.Printf("SECURITY ALERT: Suspicious process detected: %s (PID: %d) Cmd: %s", name, pid, cmd)
 		}
 	}
+}
+
+// isBlacklisted checks if the process name matches any blacklisted term exactly.
+// Returns the matched term and true if found.
+func (p *ProcessSentinel) isBlacklisted(procName string) (string, bool) {
+	lowerName := strings.ToLower(procName)
+	for _, bad := range p.Blacklist {
+		// Exact match to avoid false positives (e.g., "nc" matching "runc")
+		if lowerName == bad {
+			return bad, true
+		}
+	}
+	return "", false
 }
