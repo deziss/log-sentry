@@ -51,6 +51,7 @@ services:
       # Mount the Docker socket for automatic container log acquisition (highly recommended)
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
+# crowdsec-1  | API credentials written to '/etc/crowdsec/local_api_credentials.yaml'.
 
   prometheus:
     image: prom/prometheus:latest
