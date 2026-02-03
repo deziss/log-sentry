@@ -5,6 +5,7 @@ go 1.24.2
 require (
 	github.com/nxadm/tail v1.4.11
 	github.com/prometheus/client_golang v1.23.2
+	github.com/shirou/gopsutil/v3 v3.24.5
 )
 
 require (
@@ -19,7 +20,6 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect

@@ -8,25 +8,19 @@ services:
       - "5140:5140/udp"
       - "5140:5140/tcp"
     volumes:
-      # Mount host logs (adjust paths as needed or use dummy logs for testing)
-      - ./logs/nginx:/var/log/nginx
-      - ./logs/apache2:/var/log/apache2
-      - ./logs/caddy:/var/log/caddy
-      - ./logs/tomcat:/usr/local/tomcat/logs
-      - ./logs/traefik:/var/log/traefik
-      - ./logs/haproxy:/var/log/haproxy
-      - ./logs/envoy:/var/log/envoy
-      - ./logs/lighttpd:/var/log/lighttpd
-      - ./logs/ssh:/var/log/ssh_logs
-
-      # Mount /proc as /host/proc (ro) to avoid overwriting container's /proc
+      # Mount host logs (uncomment if you want manual mounting)
+      # - ./logs/nginx:/var/log/nginx
+      # - ./logs/apache2:/var/log/apache2
+      # - ./logs/ssh:/var/log/ssh_logs
+      
+      # Mount /proc as /host/proc (ro) REQUIRED for Auto-Discovery & Magic Access
       - /proc:/host/proc:ro
     environment:
       - HOST_PROC=/host/proc
+      - ENABLE_MAGIC_LOG_ACCESS=true
       # Manual overrides if auto-discovery fails or needs forcing
       - NGINX_ACCESS_LOG_PATH=/var/log/nginx/access.log
-      - APACHE_ACCESS_LOG_PATH=/var/log/apache2/access.log
-      - SSH_AUTH_LOG_PATH=/var/log/ssh_logs/auth.log
+      - SSH_AUTH_LOG_PATH=/var/log/auth.log
       - PORT=9102
 
   prometheus:

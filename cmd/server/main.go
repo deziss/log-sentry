@@ -98,7 +98,14 @@ func main() {
 			continue
 		}
 		
-		monitorService(svc.Name, svc.LogPath, p)
+		// Use discovered path, or magic path if enabled
+		path := svc.LogPath
+		if cfg.EnableMagicLogAccess && svc.MagicLogPath != "" {
+			path = svc.MagicLogPath
+			log.Printf("Auto-ingesting %s via magic path: %s", svc.Name, path)
+		}
+		
+		monitorService(svc.Name, path, p)
 	}
 
 	// 4d. Explicit Config Fallbacks (if not discovered or forced)

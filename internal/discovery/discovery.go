@@ -11,7 +11,8 @@ import (
 type DetectedService struct {
 	Name    string
 	PID     int
-	LogPath string // Best guess or empty
+	LogPath string
+	MagicLogPath string // /proc/[pid]/root/...
 }
 
 type AutoDiscover struct {
@@ -77,11 +78,19 @@ func (ad *AutoDiscover) Scan() ([]DetectedService, error) {
 					}
 				}
 
-				services = append(services, DetectedService{
+				svc := DetectedService{
 					Name:    serviceName,
 					PID:     toPID(pid),
 					LogPath: ad.guessLogPath(serviceName),
-				})
+				}
+				
+				// Magic Path Discovery (Find open log file)
+				magicPath := ad.findMagicLog(pid, serviceName)
+				if magicPath != "" {
+					svc.MagicLogPath = magicPath
+				}
+				
+				services = append(services, svc)
 			}
 		}
 	}
@@ -119,6 +128,34 @@ func (ad *AutoDiscover) guessLogPath(service string) string {
 		return "/var/log/envoy/access.log"
 	case "lighttpd":
 		return "/var/log/lighttpd/access.log"
+	}
+	return ""
+}
+
+func (ad *AutoDiscover) findMagicLog(pid, service string) string {
+	fdPath := filepath.Join(ad.ProcRoot, pid, "fd")
+	entries, err := os.ReadDir(fdPath)
+	if err != nil {
+		return ""
+	}
+
+	for _, entry := range entries {
+		fullFdPath := filepath.Join(fdPath, entry.Name())
+		target, err := os.Readlink(fullFdPath)
+		if err != nil {
+			continue
+		}
+
+		// Simple heuristic: check if target ends with matching log name
+		// For robustness, this should be smarter or use lsof-style logic
+		if strings.Contains(target, "access.log") || strings.EqualFold(target, ad.guessLogPath(service)) {
+			// Construct magic path: /proc/[pid]/root + target
+			// Note: target usually starts with /, so filepath.Join handles it?
+			// filepath.Join("/proc/host/root", "/var/log...") might keep absolute path?
+			// Actually os.Readlink returns absolute path in the container namespace.
+			// so we want /host/proc/[pid]/root/var/log/...
+			return filepath.Join(ad.ProcRoot, pid, "root", target)
+		}
 	}
 	return ""
 }
