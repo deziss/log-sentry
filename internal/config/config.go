@@ -11,6 +11,9 @@ type Config struct {
 	SSHAuthLogPath     string
 	Port               int
 	EnableMagicLogAccess bool
+	EnableCrowdSec       bool
+	CrowdSecLAPIURL      string
+	CrowdSecAPIKey       string
 }
 
 func Load() *Config {
@@ -20,6 +23,9 @@ func Load() *Config {
 		SSHAuthLogPath:     getEnv("SSH_AUTH_LOG_PATH", "/var/log/auth.log"),
 		Port:               getEnvInt("PORT", 9102),
 		EnableMagicLogAccess: getEnvBool("ENABLE_MAGIC_LOG_ACCESS", false),
+		EnableCrowdSec:       getEnvBool("ENABLE_CROWDSEC", false),
+		CrowdSecLAPIURL:      getEnv("CROWDSEC_LAPI_URL", "http://localhost:8080/"),
+		CrowdSecAPIKey:       getEnv("CROWDSEC_API_KEY", ""),
 	}
 }
 

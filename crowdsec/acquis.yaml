@@ -1,0 +1,30 @@
+# /etc/crowdsec/acquis.yaml
+# source: syslog
+# listen_addr: 0.0.0.0:5140 # Optional: for network syslog
+# labels:
+#   type: syslog
+# ---
+source: file
+filename: /var/log/auth.log
+labels:
+  type: syslog
+---
+source: file
+filename: /var/log/nginx/access.log
+labels:
+  type: nginx
+---
+source: file
+filename: /var/log/nginx/error.log
+labels:
+  type: nginx
+# ---
+# source: journald
+# journald_filter:
+#   - _SYSTEMD_UNIT=ssh.service
+# labels:
+#   type: syslog
+---
+# Docker Containers (using labels)
+source: docker
+use_container_labels: true

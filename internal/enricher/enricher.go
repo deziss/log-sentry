@@ -3,6 +3,7 @@ package enricher
 import (
 	"net"
 	"os/user"
+	"strings"
 	"sync"
 )
 
@@ -65,4 +66,48 @@ func (e *Enricher) ClassifyIP(ipStr string) string {
 	}
 
 	return "external"
+}
+
+// ClassifyUserAgent returns "bot", "tool", "browser", "mobile", or "other"
+func (e *Enricher) ClassifyUserAgent(ua string) string {
+	if ua == "" || ua == "-" {
+		return "unknown"
+	}
+	
+	lowerUA := strings.ToLower(ua)
+	
+	// Bots
+	if strings.Contains(lowerUA, "bot") || 
+	   strings.Contains(lowerUA, "crawl") || 
+	   strings.Contains(lowerUA, "slurp") || 
+	   strings.Contains(lowerUA, "spider") ||
+	   strings.Contains(lowerUA, "mediapartners") {
+		return "bot"
+	}
+	
+	// Tools
+	if strings.Contains(lowerUA, "curl") || 
+	   strings.Contains(lowerUA, "wget") || 
+	   strings.Contains(lowerUA, "python") || 
+	   strings.Contains(lowerUA, "go-http") ||
+	   strings.Contains(lowerUA, "postman") ||
+	   strings.Contains(lowerUA, "crowdsec") {
+		return "tool"
+	}
+	
+	// Mobile (check before generic browser)
+	if strings.Contains(lowerUA, "mobile") || 
+	   strings.Contains(lowerUA, "android") || 
+	   strings.Contains(lowerUA, "iphone") {
+		return "mobile"
+	}
+	
+	// Browsers
+	if strings.Contains(lowerUA, "mozilla") || 
+	   strings.Contains(lowerUA, "chrome") || 
+	   strings.Contains(lowerUA, "safari") {
+		return "browser"
+	}
+	
+	return "other"
 }

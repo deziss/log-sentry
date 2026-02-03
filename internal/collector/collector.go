@@ -3,8 +3,11 @@ package collector
 import (
 	"log-sentry/internal/analyzer"
 	"log-sentry/internal/anomaly"
+	"log-sentry/internal/enricher"
 	"log-sentry/internal/parser"
 	"strconv"
+
+	"log-sentry/internal/intelligence"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -18,14 +21,26 @@ type LogCollector struct {
 	WebAnomalies     *prometheus.CounterVec
 	WebLatency       *prometheus.HistogramVec // NEW: Latency Histogram
 
+	// User Agent Metric
+	WebClientType    *prometheus.CounterVec
+	
+	// Parser Health
+	ParserErrors     *prometheus.CounterVec
+	
 	// SSH Metrics
 	SSHLoginAttempts  *prometheus.CounterVec
 	SSHDisconnects    *prometheus.CounterVec
 	SSHActiveSessions prometheus.Gauge
+	
+	// Enricher
+	Enricher         *enricher.Enricher
+	
+	Bouncer          *intelligence.CrowdSecBouncer
 }
 
-func NewLogCollector() *LogCollector {
+func NewLogCollector(enricher *enricher.Enricher) *LogCollector {
 	return &LogCollector{
+		Enricher: enricher,
 		WebRequests: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "http_requests_total",
@@ -69,6 +84,20 @@ func NewLogCollector() *LogCollector {
 			},
 			[]string{"service", "type", "source_ip", "log_sample"}, // Added log_sample
 		),
+		WebClientType: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "http_requests_client_type",
+				Help: "Traffic broken down by client type (browser, bot, tool, etc.)",
+			},
+			[]string{"service", "client_type", "network_type"},
+		),
+		ParserErrors: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "log_parser_errors_total",
+				Help: "Total number of lines that failed parsing.",
+			},
+			[]string{"service", "reason"},
+		),
 		SSHLoginAttempts: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "ssh_login_attempts_total",
@@ -100,6 +129,8 @@ func (c *LogCollector) Register(reg prometheus.Registerer) {
 		c.WebLatency, // NEW
 		c.WebAttacks,
 		c.WebAnomalies,
+		c.WebClientType, // NEW
+		c.ParserErrors,  // NEW
 		c.SSHLoginAttempts,
 		c.SSHDisconnects,
 		c.SSHActiveSessions,
@@ -108,6 +139,15 @@ func (c *LogCollector) Register(reg prometheus.Registerer) {
 
 func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer.AttackResult, anomalyType anomaly.AnomalyType, networkType string) {
 	statusStr := strconv.Itoa(entry.Status)
+
+	// 1. CrowdSec Check
+	if c.Bouncer != nil {
+		if c.Bouncer.Check(entry.RemoteIP) {
+			c.Bouncer.BanMetric.Inc()
+			// Optionally log? User asked to reduce logs, but this is a high-confidence threat.
+			// Let's keep it to metric only for now, or debug.
+		}
+	}
 
 	c.WebRequests.WithLabelValues(
 		entry.Service,
@@ -137,6 +177,13 @@ func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer
 			entry.Path,
 		).Observe(entry.Latency)
 	}
+
+	// 2. Client Type Classification
+	clientType := "unknown"
+	if c.Enricher != nil {
+		clientType = c.Enricher.ClassifyUserAgent(entry.UserAgent)
+	}
+	c.WebClientType.WithLabelValues(entry.Service, clientType, networkType).Inc()
 
 	if attack.Detected {
 		c.WebAttacks.WithLabelValues(

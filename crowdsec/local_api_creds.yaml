@@ -1,0 +1,3 @@
+url: http://127.0.0.1:8083 # CHANGE this line to the same port as you configured above
+login: admin
+password: admin

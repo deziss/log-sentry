@@ -12,6 +12,7 @@ import (
 	"log-sentry/internal/config"
 	"log-sentry/internal/discovery"
 	"log-sentry/internal/enricher"
+	"log-sentry/internal/intelligence"
 	"log-sentry/internal/journald"
 	"log-sentry/internal/monitor"
 	"log-sentry/internal/parser"
@@ -28,17 +29,37 @@ func main() {
 	cfg := config.Load()
 	log.Printf("Starting Log Sentry V2 on port %d...", cfg.Port)
 
+	// 0. Initialize CrowdSec Bouncer (Optional)
+	var bouncer *intelligence.CrowdSecBouncer
+	if cfg.EnableCrowdSec {
+		var err error
+		bouncer, err = intelligence.NewCrowdSecBouncer(cfg.CrowdSecAPIKey, cfg.CrowdSecLAPIURL)
+		if err != nil {
+			log.Fatalf("Failed to initialize CrowdSec Bouncer: %v", err)
+		}
+		if err := bouncer.Start(); err != nil {
+			log.Fatalf("Failed to start CrowdSec Bouncer: %v", err)
+		}
+		go bouncer.Run()
+	}
+
 	// 2. Initialize Core Components
-	coll := collector.NewLogCollector()
+	enr := enricher.NewEnricher()
+	coll := collector.NewLogCollector(enr)
+	if bouncer != nil {
+		coll.Bouncer = bouncer
+		bouncer.Register(prometheus.DefaultRegisterer) // Explicit registration
+		log.Println("CrowdSec Integration Enabled")
+	}
 	coll.Register(prometheus.DefaultRegisterer)
 
 	secAnalyzer := analyzer.NewAnalyzer()
 	anomalyDetector := anomaly.NewAnomalyDetector()
-	enrich := enricher.NewEnricher()
+	// enricher initialized earlier as 'enr'
 	autoDisco := discovery.NewAutoDiscover()
 
 	// 2a. Initialize Worker Pool
-	wp := worker.NewPool(5, coll, secAnalyzer, anomalyDetector, enrich)
+	wp := worker.NewPool(5, coll, secAnalyzer, anomalyDetector, enr)
 	wp.Start()
 
 	// 3. Auto-Discovery
@@ -49,7 +70,7 @@ func main() {
 	}
 
 	// 4a. Start Syslog Server (Network Ingestion)
-	syslogServer := syslog.NewSyslogServer(5140, coll, secAnalyzer, enrich)
+	syslogServer := syslog.NewSyslogServer(5140, coll, secAnalyzer, enr)
 	syslogServer.Start()
 
 	// 4b. Start Monitoring for Discovered/Configured Services
@@ -141,6 +162,11 @@ func main() {
     
 	// 5. Start HTTP Server
 	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
