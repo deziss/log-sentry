@@ -1,6 +1,8 @@
 services:
   log-sentry:
     build: .
+    security_opt:
+      - apparmor=unconfined
     ports:
       - "9102:9102"
       - "5140:5140/udp"

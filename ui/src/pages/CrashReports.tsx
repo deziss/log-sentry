@@ -10,6 +10,7 @@ interface CrashSummary {
 interface ProcessSnapshot {
   pid: number; user: string; name: string; cmd: string;
   cpu_pct: number; mem_pct: number; mem_rss_mb: number; gpu_mem_mb?: number; oom_score: number;
+  read_bytes: number; write_bytes: number; net_ports?: string;
 }
 interface GPUSnapshot { id: number; util_pct: number; mem_used_mb: number; mem_total_mb: number; temp_c: number; }
 interface TrendPoint { ts: string; value: number; }
@@ -226,6 +227,18 @@ function ProcTable({ procs, details }: { procs: ProcessSnapshot[], details?: Rec
                             <div className="font-mono text-xs text-blue-300 mt-1 break-all bg-black/40 p-2 rounded border border-white/5">{details[p.pid].exe_path}</div>
                           </div>
                         )}
+                        <div className="flex flex-wrap gap-4">
+                          <div>
+                            <span className="text-xs text-gray-500 uppercase font-semibold">Disk I/O </span>
+                            <div className="font-mono text-xs text-green-300 mt-1">Read: {(p.read_bytes / 1024 / 1024).toFixed(3)} MB | Write: {(p.write_bytes / 1024 / 1024).toFixed(3)} MB</div>
+                          </div>
+                          {p.net_ports && (
+                            <div>
+                              <span className="text-xs text-gray-500 uppercase font-semibold">Active Ports</span>
+                              <div className="font-mono text-xs text-yellow-300 mt-1 break-all">{p.net_ports}</div>
+                            </div>
+                          )}
+                        </div>
                         {details[p.pid].logs && (
                           <div>
                             <span className="text-xs text-gray-500 uppercase font-semibold">Recent Journal Logs</span>

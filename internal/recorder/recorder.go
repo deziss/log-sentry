@@ -30,9 +30,12 @@ type ProcessSnapshot struct {
 	Cmd      string  `json:"cmd"`
 	CPUPct   float64 `json:"cpu_pct"`
 	MemPct   float64 `json:"mem_pct"`
-	MemRSSMB float64 `json:"mem_rss_mb"`
-	GPUMemMB int     `json:"gpu_mem_mb,omitempty"`
-	OOMScore int     `json:"oom_score"`
+	MemRSSMB   float64 `json:"mem_rss_mb"`
+	GPUMemMB   int     `json:"gpu_mem_mb,omitempty"`
+	OOMScore   int     `json:"oom_score"`
+	ReadBytes  uint64  `json:"read_bytes"`
+	WriteBytes uint64  `json:"write_bytes"`
+	NetPorts   string  `json:"net_ports,omitempty"`
 }
 
 // GPUSnapshot captures a single GPU's state
@@ -585,7 +588,25 @@ func readAllProcesses() []ProcessSnapshot {
 			p.MemPct = p.MemRSSMB / totalMem * 100
 		}
 
-		if p.MemRSSMB > 0 {
+		// Read process I/O
+		if ioData, err := os.ReadFile(filepath.Join(procDir, "io")); err == nil {
+			for _, line := range strings.Split(string(ioData), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) == 2 {
+					val, _ := strconv.ParseUint(fields[1], 10, 64)
+					if fields[0] == "read_bytes:" {
+						p.ReadBytes = val
+					} else if fields[0] == "write_bytes:" {
+						p.WriteBytes = val
+					}
+				}
+			}
+		}
+
+		// Read Network Ports (Heuristic: scanning active TCP connections and matching inodes)
+		p.NetPorts = readNetPorts(pid, procDir)
+
+		if p.MemRSSMB > 0 || p.ReadBytes > 0 || p.WriteBytes > 0 {
 			procs = append(procs, p)
 		}
 	}
@@ -622,6 +643,64 @@ func resolveUser(uid string) string {
 		}
 	}
 	return uid
+}
+
+func readNetPorts(pid int, procDir string) string {
+	fdDir := filepath.Join(procDir, "fd")
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		return ""
+	}
+
+	inodes := make(map[string]bool)
+	for _, entry := range entries {
+		link, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
+		if err == nil && strings.HasPrefix(link, "socket:[") && strings.HasSuffix(link, "]") {
+			inode := link[8 : len(link)-1]
+			inodes[inode] = true
+		}
+	}
+
+	if len(inodes) == 0 {
+		return ""
+	}
+
+	ports := make(map[string]bool)
+	checkTcpMapping := func(file string) {
+		data, err := os.ReadFile(filepath.Join(procDir, file))
+		if err != nil {
+			return
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines[1:] {
+			fields := strings.Fields(line)
+			if len(fields) < 10 {
+				continue
+			}
+			localAddr := fields[1]
+			inode := fields[9]
+			if inodes[inode] {
+				parts := strings.Split(localAddr, ":")
+				if len(parts) == 2 {
+					portHex := parts[1]
+					portDec, err := strconv.ParseInt(portHex, 16, 32)
+					if err == nil {
+						ports[fmt.Sprintf("%d", portDec)] = true
+					}
+				}
+			}
+		}
+	}
+
+	checkTcpMapping("net/tcp")
+	checkTcpMapping("net/tcp6")
+
+	var portList []string
+	for port := range ports {
+		portList = append(portList, port)
+	}
+	sort.Strings(portList)
+	return strings.Join(portList, ",")
 }
 
 // ── Webhook ──────────────────────────────────────────────────────
