@@ -3,6 +3,8 @@ services:
     build: .
     security_opt:
       - apparmor=unconfined
+    cap_add:
+      - SYS_PTRACE
     ports:
       - "9102:9102"
       - "5140:5140/udp"
@@ -23,30 +25,33 @@ services:
       - /var/log/journal:/var/log/journal:ro
       - /run/log/journal:/run/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
+      - /etc/passwd:/host/etc/passwd:ro
     environment:
       - HOST_PROC=/host/proc
       - PORT=9102
       - LOKI_URL=http://loki:3100
       - THRESHOLD=95
 
-  loki:
-    image: grafana/loki:latest
-    ports:
-      - "3101:3100"
-    command: -config.file=/etc/loki/local-config.yaml
+## Dont run loki, prometheus, grafana for now
 
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  # loki:
+  #   image: grafana/loki:latest
+  #   ports:
+  #     - "3101:3100"
+  #   command: -config.file=/etc/loki/local-config.yaml
 
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3100:3000"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3100:3000"
+  #   volumes:
+  #     - ./grafana/provisioning:/etc/grafana/provisioning
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin

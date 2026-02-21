@@ -632,14 +632,17 @@ func readTotalMem() (float64, error) {
 }
 
 func resolveUser(uid string) string {
-	data, err := os.ReadFile("/etc/passwd")
+	data, err := os.ReadFile("/host/etc/passwd")
 	if err != nil {
-		return uid
+		data, err = os.ReadFile("/etc/passwd")
+		if err != nil {
+			return uid
+		}
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		parts := strings.Split(line, ":")
 		if len(parts) >= 3 && parts[2] == uid {
-			return parts[0]
+			return fmt.Sprintf("%s (%s)", uid, parts[0])
 		}
 	}
 	return uid
