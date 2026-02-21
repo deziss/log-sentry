@@ -4,17 +4,77 @@ import (
 	"net"
 	"os/user"
 	"sync"
+
+	"github.com/oschwald/geoip2-golang"
 )
 
 type Enricher struct {
 	userCache map[string]string // UID -> Username
 	mu        sync.RWMutex
+	cityDB    *geoip2.Reader
+	asnDB     *geoip2.Reader
 }
 
-func NewEnricher() *Enricher {
-	return &Enricher{
+func NewEnricher(cityDBPath, asnDBPath string) *Enricher {
+	e := &Enricher{
 		userCache: make(map[string]string),
 	}
+	
+	if cityDBPath != "" {
+		db, err := geoip2.Open(cityDBPath)
+		if err == nil {
+			e.cityDB = db
+		}
+	}
+	if asnDBPath != "" {
+		db, err := geoip2.Open(asnDBPath)
+		if err == nil {
+			e.asnDB = db
+		}
+	}
+	
+	return e
+}
+
+// Close should be called on shutdown
+func (e *Enricher) Close() {
+	if e.cityDB != nil {
+		e.cityDB.Close()
+	}
+	if e.asnDB != nil {
+		e.asnDB.Close()
+	}
+}
+
+// GeoEnrich returns Country ISO code and ASN name if available
+func (e *Enricher) GeoEnrich(ipStr string) (country string, asn string) {
+	if ipStr == "-" || ipStr == "" {
+		return "Unknown", "Unknown"
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return "Invalid", "Invalid"
+	}
+
+	country = "Unknown"
+	asn = "Unknown"
+
+	if e.cityDB != nil {
+		record, err := e.cityDB.Country(ip)
+		if err == nil && record.Country.IsoCode != "" {
+			country = record.Country.IsoCode
+		}
+	}
+
+	if e.asnDB != nil {
+		record, err := e.asnDB.ASN(ip)
+		if err == nil && record.AutonomousSystemOrganization != "" {
+			asn = record.AutonomousSystemOrganization
+		}
+	}
+
+	return country, asn
 }
 
 // ResolveUser translates a UID string to a Username.

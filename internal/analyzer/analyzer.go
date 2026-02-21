@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"encoding/base64"
+	"net/url"
 	"regexp"
 )
 
@@ -45,15 +47,37 @@ type AttackResult struct {
 
 // DetectAttack analyzes the request path, query params (if in path), and user agent
 func (a *Analyzer) DetectAttack(path, userAgent string) AttackResult {
-	if a.sqliRegex.MatchString(path) {
-		return AttackResult{Detected: true, Type: "SQL Injection", Severity: "critical"}
+	// 1. Decode URL path to catch %20, %27, etc
+	decodedPath, err := url.QueryUnescape(path)
+	if err != nil {
+		decodedPath = path // Fallback to raw if decode fails
 	}
-	if a.xssRegex.MatchString(path) {
-		return AttackResult{Detected: true, Type: "XSS", Severity: "high"}
+	
+	// 2. Attempt Base64 decoding (many attackers base64 encode payloads like b3IgMT0x = or 1=1)
+	// We extract potential base64 strings and decode them (simplified: try decoding whole string)
+	var b64Decoded string
+	if b, err := base64.StdEncoding.DecodeString(path); err == nil {
+		b64Decoded = string(b)
 	}
-	if a.pathTravRegex.MatchString(path) {
-		return AttackResult{Detected: true, Type: "Path Traversal", Severity: "high"}
+
+	targets := []string{path, decodedPath}
+	if b64Decoded != "" {
+		targets = append(targets, b64Decoded)
 	}
+
+	for _, target := range targets {
+		if a.sqliRegex.MatchString(target) {
+			return AttackResult{Detected: true, Type: "SQL Injection", Severity: "critical"}
+		}
+		if a.xssRegex.MatchString(target) {
+			return AttackResult{Detected: true, Type: "XSS", Severity: "high"}
+		}
+		if a.pathTravRegex.MatchString(target) {
+			return AttackResult{Detected: true, Type: "Path Traversal", Severity: "high"}
+		}
+	}
+	
+	// User-agent checks usually don't need intense decoding, but could be added if needed
 	if a.scannerRegex.MatchString(userAgent) {
 		return AttackResult{Detected: true, Type: "Scanner", Severity: "medium"}
 	}

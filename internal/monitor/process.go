@@ -4,25 +4,41 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
+
+	"log-sentry/internal/alerts"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
 type ProcessSentinel struct {
-	Blacklist []string
+	Blacklist   []string
+	mu          sync.RWMutex
 	AlertMetric *prometheus.GaugeVec
+	Alerter     *alerts.Dispatcher
 }
 
-func NewProcessSentinel() *ProcessSentinel {
+func NewProcessSentinel(alerter *alerts.Dispatcher) *ProcessSentinel {
 	return &ProcessSentinel{
 		Blacklist: []string{"nc", "nmap", "hydra", "john", "xmrig"},
 		AlertMetric: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "security_unexpected_process_active",
 			Help: "Indicates if a blacklisted process is currently running (1=active)",
 		}, []string{"name", "pid", "cmdline"}),
+		Alerter: alerter,
 	}
+}
+
+func (p *ProcessSentinel) UpdateBlacklist(newList []string) {
+	if len(newList) == 0 {
+		return
+	}
+	p.mu.Lock()
+	p.Blacklist = newList
+	p.mu.Unlock()
+	log.Printf("ProcessSentinel Blacklist updated. Now monitoring %d processes.", len(newList))
 }
 
 func (p *ProcessSentinel) Register(reg prometheus.Registerer) {
@@ -50,13 +66,18 @@ func (p *ProcessSentinel) scan() {
 
 	p.AlertMetric.Reset() // Clear old alerts
 
+	p.mu.RLock()
+	currentBlacklist := make([]string, len(p.Blacklist))
+	copy(currentBlacklist, p.Blacklist)
+	p.mu.RUnlock()
+
 	for _, proc := range procs {
 		name, err := proc.Name()
 		if err != nil {
 			continue
 		}
 
-		for _, bad := range p.Blacklist {
+		for _, bad := range currentBlacklist {
 			// Simple substring match for "nmap" or "xmrig"
 			if strings.Contains(strings.ToLower(name), bad) {
 				pid := proc.Pid
@@ -68,6 +89,15 @@ func (p *ProcessSentinel) scan() {
 				p.AlertMetric.WithLabelValues(bad, fmt.Sprintf("%d", pid), cmd).Set(1)
 				// Log it too
 				log.Printf("SECURITY ALERT: Suspicious process detected: %s (PID: %d) Cmd: %s", name, pid, cmd)
+				
+				if p.Alerter != nil {
+					p.Alerter.Send(
+						"Suspicious Process Detected",
+						fmt.Sprintf("Blacklisted process '%s' is running.\nPID: %d\nCmd: %s", name, pid, cmd),
+						"CRITICAL",
+						"ProcessSentinel",
+					)
+				}
 			}
 		}
 	}

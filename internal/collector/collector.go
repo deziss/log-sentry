@@ -3,6 +3,7 @@ package collector
 import (
 	"log-sentry/internal/analyzer"
 	"log-sentry/internal/anomaly"
+	"log-sentry/internal/enricher"
 	"log-sentry/internal/parser"
 	"strconv"
 
@@ -10,6 +11,8 @@ import (
 )
 
 type LogCollector struct {
+	Enricher         *enricher.Enricher
+	
 	// Web Metrics (Generic for Nginx, Apache, etc.)
 	WebRequests      *prometheus.CounterVec
 	WebRequestBytes  *prometheus.CounterVec // often missing in standard logs
@@ -23,14 +26,15 @@ type LogCollector struct {
 	SSHActiveSessions prometheus.Gauge
 }
 
-func NewLogCollector() *LogCollector {
+func NewLogCollector(enr *enricher.Enricher) *LogCollector {
 	return &LogCollector{
+		Enricher: enr,
 		WebRequests: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "http_requests_total",
 				Help: "Total number of HTTP requests.",
 			},
-			[]string{"service", "method", "status", "path", "remote_ip", "network_type"},
+			[]string{"service", "method", "status", "path", "remote_ip", "network_type", "country", "asn"},
 		),
 		WebRequestBytes: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -99,6 +103,11 @@ func (c *LogCollector) Register(reg prometheus.Registerer) {
 func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer.AttackResult, anomalyType anomaly.AnomalyType, networkType string) {
 	statusStr := strconv.Itoa(entry.Status)
 
+	country, asn := "Unknown", "Unknown"
+	if c.Enricher != nil {
+		country, asn = c.Enricher.GeoEnrich(entry.RemoteIP)
+	}
+
 	c.WebRequests.WithLabelValues(
 		entry.Service,
 		entry.Method,
@@ -106,6 +115,8 @@ func (c *LogCollector) ProcessWeb(entry *parser.GenericLogEntry, attack analyzer
 		entry.Path,
 		entry.RemoteIP,
 		networkType,
+		country,
+		asn,
 	).Inc()
 
 	c.WebResponseBytes.WithLabelValues(

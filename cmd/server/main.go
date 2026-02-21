@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"log-sentry/internal/alerts"
 	"log-sentry/internal/analyzer"
 	"log-sentry/internal/anomaly"
 	"log-sentry/internal/collector"
@@ -29,12 +30,15 @@ func main() {
 	log.Printf("Starting Log Sentry V2 on port %d...", cfg.Port)
 
 	// 2. Initialize Core Components
-	coll := collector.NewLogCollector()
+	// Enricher needs to be initialized before Collector now
+	enrich := enricher.NewEnricher(cfg.GeoIPCityPath, cfg.GeoIPASNPath)
+	defer enrich.Close()
+
+	coll := collector.NewLogCollector(enrich)
 	coll.Register(prometheus.DefaultRegisterer)
 
 	secAnalyzer := analyzer.NewAnalyzer()
 	anomalyDetector := anomaly.NewAnomalyDetector()
-	enrich := enricher.NewEnricher()
 	autoDisco := discovery.NewAutoDiscover()
 
 	// 2a. Initialize Worker Pool
@@ -108,6 +112,9 @@ func main() {
 		monitorService("nginx_manual", cfg.NginxAccessLogPath, &parser.NginxParser{})
 	}
 	
+	// 4d. Alerting System
+	alerter := alerts.NewDispatcher(cfg.WebhookURL)
+
 	// 4e. V2.2 Security Monitors
 	// SSL Monitor (Default check localhost:443)
 	sslMon := monitor.NewSSLMonitor()
@@ -116,16 +123,29 @@ func main() {
 	sslMon.Start(1 * time.Hour) // Check hourly
 
 	// File Integrity Monitor (FIM)
-	fim := monitor.NewFIM()
+	// Passing alerter so FIM can send webhooks on critical file changes
+	fim := monitor.NewFIM(alerter) 
 	fim.Register(prometheus.DefaultRegisterer)
 	fim.AddPath("/etc/passwd") 
 	fim.AddPath(cfg.NginxAccessLogPath) // Just as an example watcher
 	fim.Start(30 * time.Second)
 
 	// Process Sentinel
-	procSent := monitor.NewProcessSentinel()
+	procSent := monitor.NewProcessSentinel(alerter)
 	procSent.Register(prometheus.DefaultRegisterer)
-	// Add custom "bad" processes if needed, default list is used
+	
+	// Dynamic Rules loading for Process Sentinel
+	if r, err := cfg.LoadRules(); err == nil {
+		procSent.UpdateBlacklist(r.ProcessBlacklist)
+	}
+	cfg.WatchConfig(func() {
+		if r, err := cfg.LoadRules(); err == nil {
+			procSent.UpdateBlacklist(r.ProcessBlacklist)
+		} else {
+			log.Printf("Failed to reload rules: %v", err)
+		}
+	})
+
 	procSent.Start(30 * time.Second)
 
 	// SSH Monitoring is distinct

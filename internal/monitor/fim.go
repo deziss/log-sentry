@@ -1,8 +1,11 @@
 package monitor
 
 import (
+	"fmt"
 	"os"
 	"time"
+
+	"log-sentry/internal/alerts"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -11,9 +14,10 @@ type FIM struct {
 	Paths []string
 	FileHashes map[string]int64 // For V2.2 we monitor ModTime and Size for speed/simplicity
 	ChangeMetric *prometheus.CounterVec
+	Alerter      *alerts.Dispatcher
 }
 
-func NewFIM() *FIM {
+func NewFIM(alerter *alerts.Dispatcher) *FIM {
 	return &FIM{
 		Paths: []string{},
 		FileHashes: make(map[string]int64),
@@ -21,6 +25,7 @@ func NewFIM() *FIM {
 			Name: "sensitive_file_changed_total",
 			Help: "Total number of detected changes to sensitive files",
 		}, []string{"path", "severity"}),
+		Alerter: alerter,
 	}
 }
 
@@ -63,6 +68,15 @@ func (f *FIM) checkAll() {
 		if exists && current != last {
 			f.ChangeMetric.WithLabelValues(path, "critical").Inc()
 			f.FileHashes[path] = current
+			
+			if f.Alerter != nil {
+				f.Alerter.Send(
+					"File Integrity Violation",
+					fmt.Sprintf("Monitored file modified: %s", path),
+					"CRITICAL",
+					"FIM",
+				)
+			}
 		} else if !exists {
 			f.FileHashes[path] = current
 		}

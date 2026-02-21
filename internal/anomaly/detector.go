@@ -12,46 +12,44 @@ const (
 	Burst500 AnomalyType = "500_burst"
 )
 
-type IPStats struct {
-	Count404   int
-	Count500   int
-	LastSeen   time.Time
+type IPBucket struct {
+	Tokens404 float64
+	Tokens500 float64
+	LastSeen  time.Time
 }
 
 type AnomalyDetector struct {
 	mu           sync.Mutex
-	Stats        map[string]*IPStats
-	Threshold404 int
-	Threshold500 int
-	Window       time.Duration
+	Stats        map[string]*IPBucket
+	Rate404      float64 // Tokens added per second
+	Capacity404  float64 // Max tokens
+	Rate500      float64
+	Capacity500  float64
+	Window       time.Duration // Time before dropping IP from memory
 }
 
 func NewAnomalyDetector() *AnomalyDetector {
 	ad := &AnomalyDetector{
-		Stats:        make(map[string]*IPStats),
-		Threshold404: 10, // 10 404s per minute is suspicious
-		Threshold500: 20, // 20 500s per minute is definitely suspicious
-		Window:       1 * time.Minute,
+		Stats:       make(map[string]*IPBucket),
+		Rate404:     10.0 / 60.0, // 10 per minute
+		Capacity404: 10.0,        // allow burst of 10
+		Rate500:     20.0 / 60.0, // 20 per minute
+		Capacity500: 20.0,
+		Window:      5 * time.Minute, // Cleanup after 5 mins of inactivity
 	}
 	go ad.cleanupLoop()
 	return ad
 }
 
 func (ad *AnomalyDetector) cleanupLoop() {
-	ticker := time.NewTicker(ad.Window) // Cleanup every window
+	ticker := time.NewTicker(ad.Window)
 	defer ticker.Stop()
 	for range ticker.C {
 		ad.mu.Lock()
 		now := time.Now()
-		for ip, stat := range ad.Stats {
-			if now.Sub(stat.LastSeen) > ad.Window {
+		for ip, bucket := range ad.Stats {
+			if now.Sub(bucket.LastSeen) > ad.Window {
 				delete(ad.Stats, ip)
-			} else {
-				// Reset counts for the new window? 
-				// Simple sliding window approximation: just clear counts periodically
-				// Ideally we'd use a real sliding window, but this is "Lite"
-				stat.Count404 = 0
-				stat.Count500 = 0
 			}
 		}
 		ad.mu.Unlock()
@@ -60,32 +58,52 @@ func (ad *AnomalyDetector) cleanupLoop() {
 
 // Check returns an anomaly type if detected, or empty string
 func (ad *AnomalyDetector) Check(ip string, status int) AnomalyType {
+	if status != 404 && (status < 500 || status > 599) {
+		return ""
+	}
+
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
 
-	stat, exists := ad.Stats[ip]
+	now := time.Now()
+	bucket, exists := ad.Stats[ip]
+	
 	if !exists {
-		stat = &IPStats{}
-		ad.Stats[ip] = stat
-	}
-	stat.LastSeen = time.Now()
-
-	if status == 404 {
-		stat.Count404++
-		if stat.Count404 > ad.Threshold404 {
-			// Trigger only once per window per threshold crossing?
-			// Or every time? Let's dampen it by resetting or modulo?
-			// For simplicity, we return it every time it's above threshold.
-			// The counters generally reset every minute.
-			// To avoid metric explosion, maybe we just return it. The Collector controls increment.
-			return Flood404
+		bucket = &IPBucket{
+			Tokens404: ad.Capacity404, // Start full
+			Tokens500: ad.Capacity500,
+			LastSeen:  now,
 		}
+		ad.Stats[ip] = bucket
+	} else {
+		// Refill tokens based on time passed
+		elapsed := now.Sub(bucket.LastSeen).Seconds()
+		if elapsed > 0 {
+			bucket.Tokens404 += elapsed * ad.Rate404
+			if bucket.Tokens404 > ad.Capacity404 {
+				bucket.Tokens404 = ad.Capacity404
+			}
+			
+			bucket.Tokens500 += elapsed * ad.Rate500
+			if bucket.Tokens500 > ad.Capacity500 {
+				bucket.Tokens500 = ad.Capacity500
+			}
+		}
+		bucket.LastSeen = now
 	}
 
-	if status >= 500 && status < 600 {
-		stat.Count500++
-		if stat.Count500 > ad.Threshold500 {
-			return Burst500
+	// Consume tokens
+	if status == 404 {
+		if bucket.Tokens404 >= 1 {
+			bucket.Tokens404 -= 1
+		} else {
+			return Flood404 // Out of tokens = flooded
+		}
+	} else if status >= 500 && status < 600 {
+		if bucket.Tokens500 >= 1 {
+			bucket.Tokens500 -= 1
+		} else {
+			return Burst500 // Out of tokens = burst
 		}
 	}
 
