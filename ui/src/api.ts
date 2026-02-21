@@ -17,6 +17,12 @@ export interface HealthStatus {
   parsers: number;
 }
 
+export interface AppConfig {
+  loki_url: string;
+  prometheus_url: string;
+  grafana_url: string;
+}
+
 // ── Services ─────────────────────────────────────────────────────
 
 export async function fetchServices(): Promise<ServiceDef[]> {
@@ -43,6 +49,13 @@ export async function updateService(name: string, svc: ServiceDef): Promise<Serv
   });
   if (!res.ok) throw new Error('Failed to update service');
   return res.json();
+}
+
+export async function toggleService(name: string, enabled: boolean): Promise<ServiceDef> {
+  const services = await fetchServices();
+  const svc = services.find(s => s.name === name);
+  if (!svc) throw new Error(`Service "${name}" not found`);
+  return updateService(name, { ...svc, enabled });
 }
 
 export async function deleteService(name: string): Promise<void> {
@@ -83,5 +96,13 @@ export async function fetchParsers(): Promise<string[]> {
 export async function fetchHealth(): Promise<HealthStatus> {
   const res = await fetch(`${API_BASE}/health`);
   if (!res.ok) throw new Error('Failed to fetch health');
+  return res.json();
+}
+
+// ── Config ──────────────────────────────────────────────────────
+
+export async function fetchConfig(): Promise<AppConfig> {
+  const res = await fetch(`${API_BASE}/config`);
+  if (!res.ok) throw new Error('Failed to fetch config');
   return res.json();
 }

@@ -36,6 +36,11 @@ type ProcessSnapshot struct {
 	ReadBytes  uint64  `json:"read_bytes"`
 	WriteBytes uint64  `json:"write_bytes"`
 	NetPorts   string  `json:"net_ports,omitempty"`
+	NetRxBytes  uint64 `json:"net_rx_bytes"`
+	NetTxBytes  uint64 `json:"net_tx_bytes"`
+	IsExternal  bool   `json:"is_external"`
+	FdCount     int    `json:"fd_count"`
+	ThreadCount int    `json:"thread_count"`
 }
 
 // GPUSnapshot captures a single GPU's state
@@ -603,10 +608,36 @@ func readAllProcesses() []ProcessSnapshot {
 			}
 		}
 
-		// Read Network Ports (Heuristic: scanning active TCP connections and matching inodes)
-		p.NetPorts = readNetPorts(pid, procDir)
+		// Read Network I/O
+		if netData, err := os.ReadFile(filepath.Join(procDir, "net/dev")); err == nil {
+			for _, line := range strings.Split(string(netData), "\n") {
+				if strings.Contains(line, "lo:") || !strings.Contains(line, ":") {
+					continue
+				}
+				fields := strings.Fields(line)
+				if len(fields) >= 10 {
+					rx, _ := strconv.ParseUint(fields[1], 10, 64)
+					tx, _ := strconv.ParseUint(fields[9], 10, 64)
+					p.NetRxBytes += rx
+					p.NetTxBytes += tx
+				}
+			}
+		}
 
-		if p.MemRSSMB > 0 || p.ReadBytes > 0 || p.WriteBytes > 0 {
+		// Read File Descriptors
+		if fdEntries, err := os.ReadDir(filepath.Join(procDir, "fd")); err == nil {
+			p.FdCount = len(fdEntries)
+		}
+
+		// Read Threads
+		if taskEntries, err := os.ReadDir(filepath.Join(procDir, "task")); err == nil {
+			p.ThreadCount = len(taskEntries)
+		}
+
+		// Read Network Ports (Heuristic: scanning active TCP connections and matching inodes)
+		p.NetPorts, p.IsExternal = readNetPorts(pid, procDir)
+
+		if p.MemRSSMB > 0 || p.ReadBytes > 0 || p.WriteBytes > 0 || p.NetRxBytes > 0 || p.NetTxBytes > 0 {
 			procs = append(procs, p)
 		}
 	}
@@ -648,11 +679,11 @@ func resolveUser(uid string) string {
 	return uid
 }
 
-func readNetPorts(pid int, procDir string) string {
+func readNetPorts(pid int, procDir string) (string, bool) {
 	fdDir := filepath.Join(procDir, "fd")
 	entries, err := os.ReadDir(fdDir)
 	if err != nil {
-		return ""
+		return "", false
 	}
 
 	inodes := make(map[string]bool)
@@ -665,30 +696,41 @@ func readNetPorts(pid int, procDir string) string {
 	}
 
 	if len(inodes) == 0 {
-		return ""
+		return "", false
 	}
 
 	ports := make(map[string]bool)
+	isExternal := false
 	checkTcpMapping := func(file string) {
 		data, err := os.ReadFile(filepath.Join(procDir, file))
 		if err != nil {
 			return
 		}
 		lines := strings.Split(string(data), "\n")
-		for _, line := range lines[1:] {
+		for _, line := range lines[1:] { // Skip header line
 			fields := strings.Fields(line)
 			if len(fields) < 10 {
 				continue
 			}
 			localAddr := fields[1]
+			remoteAddr := fields[2]
+			state := fields[3]
 			inode := fields[9]
-			if inodes[inode] {
+			if inodes[inode] { // Check if this connection belongs to our process
 				parts := strings.Split(localAddr, ":")
 				if len(parts) == 2 {
 					portHex := parts[1]
 					portDec, err := strconv.ParseInt(portHex, 16, 32)
 					if err == nil {
 						ports[fmt.Sprintf("%d", portDec)] = true
+						
+						// Flag as external if it's listening on all interfaces (0.0.0.0 or ::)
+						// or if it has an ESTABLISHED (01) connection to a non-local IP.
+						if state == "0A" && (strings.HasPrefix(localAddr, "00000000:") || strings.HasPrefix(localAddr, "00000000000000000000000000000000:")) {
+							isExternal = true
+						} else if state == "01" && remoteAddr != "00000000:0000" && !strings.HasPrefix(remoteAddr, "0100007F:") && !strings.HasPrefix(remoteAddr, "00000000000000000000000001000000:") {
+							isExternal = true
+						}
 					}
 				}
 			}
@@ -703,7 +745,7 @@ func readNetPorts(pid int, procDir string) string {
 		portList = append(portList, port)
 	}
 	sort.Strings(portList)
-	return strings.Join(portList, ",")
+	return strings.Join(portList, ","), isExternal
 }
 
 // ── Webhook ──────────────────────────────────────────────────────

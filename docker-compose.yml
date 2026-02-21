@@ -10,14 +10,7 @@ services:
       - "5140:5140/udp"
       - "5140:5140/tcp"
     volumes:
-      - ./logs/nginx:/var/log/nginx
-      - ./logs/apache2:/var/log/apache2
-      - ./logs/caddy:/var/log/caddy
-      - ./logs/tomcat:/usr/local/tomcat/logs
-      - ./logs/traefik:/var/log/traefik
-      - ./logs/haproxy:/var/log/haproxy
-      - ./logs/envoy:/var/log/envoy
-      - ./logs/lighttpd:/var/log/lighttpd
+      - ./logs:/var/log/services
       - ./logs/ssh:/var/log/ssh_logs
       - ./services.json:/app/services.json
       - ./rules.json:/app/rules.json
@@ -30,9 +23,11 @@ services:
       - HOST_PROC=/host/proc
       - PORT=9102
       - LOKI_URL=http://loki:3100
+      - PROMETHEUS_URL=http://localhost:9090
+      - GRAFANA_URL=http://localhost:3100
       - THRESHOLD=95
 
-## Dont run loki, prometheus, grafana for now
+## Uncomment to enable observability stack
 
   # loki:
   #   image: grafana/loki:latest

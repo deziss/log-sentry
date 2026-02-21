@@ -3,7 +3,7 @@
     {
       "name": "nginx",
       "type": "nginx",
-      "log_path": "/var/log/nginx/access.log",
+      "log_path": "/var/log/services/nginx/access.log",
       "enabled": true
     },
     {

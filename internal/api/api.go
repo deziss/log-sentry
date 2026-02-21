@@ -35,6 +35,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/forensic", a.cors(a.handleForensic))
 	mux.HandleFunc("/api/snapshots", a.cors(a.handleSnapshots))
 	mux.HandleFunc("/api/crashes", a.cors(a.handleCrashes))
+	mux.HandleFunc("/api/config", a.cors(a.handleConfig))
 }
 
 // ── CORS middleware ──────────────────────────────────────────────
@@ -244,6 +245,16 @@ func (a *API) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status":   "ok",
 		"services": serviceCount,
 		"parsers":  len(parser.AvailableParsers()),
+	})
+}
+
+// ── Config (external URLs) ───────────────────────────────────────
+
+func (a *API) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"loki_url":       os.Getenv("LOKI_URL"),
+		"prometheus_url": os.Getenv("PROMETHEUS_URL"),
+		"grafana_url":    os.Getenv("GRAFANA_URL"),
 	})
 }
 

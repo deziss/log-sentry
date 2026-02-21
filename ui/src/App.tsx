@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ThemeProvider } from './ThemeContext';
+import { ToastProvider } from './components/Toast';
 import './index.css';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
@@ -15,7 +17,7 @@ const queryClient = new QueryClient({
   },
 });
 
-type Page = 'dashboard' | 'services' | 'rules' | 'attacks' | 'health' | 'crashes';
+export type Page = 'dashboard' | 'services' | 'rules' | 'attacks' | 'health' | 'crashes';
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
@@ -32,13 +34,17 @@ export default function App() {
   };
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <div className="flex h-screen overflow-hidden">
-        <Sidebar current={page} onNavigate={setPage} />
-        <main className="flex-1 overflow-y-auto p-6">
-          {renderPage()}
-        </main>
-      </div>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <QueryClientProvider client={queryClient}>
+          <div className="flex h-screen overflow-hidden">
+            <Sidebar current={page} onNavigate={setPage} />
+            <main className="flex-1 overflow-y-auto p-6 bg-theme-primary">
+              {renderPage()}
+            </main>
+          </div>
+        </QueryClientProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }
