@@ -17,6 +17,11 @@ type Config struct {
 	RulesPath          string // Path to custom rules (e.g., process blacklist)
 	ServicesConfigPath string // Path to services.json
 	Services           []ServiceDef
+
+	// Resource Recorder (crash root-cause analysis)
+	SnapshotInterval int    // seconds between snapshots (default: 5)
+	SnapshotFile     string // path to ring buffer file (default: "snapshots.jsonl")
+	SnapshotMaxCount int    // max snapshots to keep (default: 720 = 1hr at 5s)
 }
 
 // ServiceDef defines a single log source to monitor.
@@ -40,6 +45,9 @@ func Load() *Config {
 		WebhookURL:         getEnv("WEBHOOK_URL", ""),
 		RulesPath:          getEnv("RULES_PATH", "rules.json"),
 		ServicesConfigPath: getEnv("SERVICES_CONFIG", "services.json"),
+		SnapshotInterval:   getEnvInt("SNAPSHOT_INTERVAL", 5),
+		SnapshotFile:       getEnv("SNAPSHOT_FILE", "snapshots.jsonl"),
+		SnapshotMaxCount:   getEnvInt("SNAPSHOT_MAX_COUNT", 720),
 	}
 
 	// Load services from JSON

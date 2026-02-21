@@ -5,21 +5,24 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
 	"log-sentry/internal/config"
 	"log-sentry/internal/parser"
+	"log-sentry/internal/recorder"
 )
 
 // API holds shared state for all handlers
 type API struct {
-	Config *config.Config
-	mu     sync.RWMutex
+	Config   *config.Config
+	Recorder *recorder.ResourceRecorder
+	mu       sync.RWMutex
 }
 
-func NewAPI(cfg *config.Config) *API {
-	return &API{Config: cfg}
+func NewAPI(cfg *config.Config, rec *recorder.ResourceRecorder) *API {
+	return &API{Config: cfg, Recorder: rec}
 }
 
 // RegisterRoutes mounts all API endpoints on the given mux
@@ -28,6 +31,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rules", a.cors(a.handleRules))
 	mux.HandleFunc("/api/parsers", a.cors(a.handleParsers))
 	mux.HandleFunc("/api/health", a.cors(a.handleHealth))
+	mux.HandleFunc("/api/forensic", a.cors(a.handleForensic))
+	mux.HandleFunc("/api/snapshots", a.cors(a.handleSnapshots))
 }
 
 // ── CORS middleware ──────────────────────────────────────────────
@@ -255,4 +260,23 @@ func contains(s []string, e string) bool {
 		}
 	}
 	return false
+}
+
+// ── Forensic Analysis ────────────────────────────────────────────
+
+func (a *API) handleForensic(w http.ResponseWriter, _ *http.Request) {
+	snaps := a.Recorder.GetSnapshots(0) // all snapshots
+	report := recorder.Analyze(snaps)
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (a *API) handleSnapshots(w http.ResponseWriter, r *http.Request) {
+	n := 60 // default: last 60 snapshots (5 min at 5s intervals)
+	if q := r.URL.Query().Get("last"); q != "" {
+		if v, err := strconv.Atoi(q); err == nil && v > 0 {
+			n = v
+		}
+	}
+	snaps := a.Recorder.GetSnapshots(n)
+	writeJSON(w, http.StatusOK, snaps)
 }

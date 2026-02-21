@@ -8,6 +8,7 @@ import (
 
 	"log-sentry/internal/alerts"
 	"log-sentry/internal/api"
+	"log-sentry/internal/recorder"
 	"log-sentry/internal/analyzer"
 	"log-sentry/internal/anomaly"
 	"log-sentry/internal/collector"
@@ -110,8 +111,14 @@ func main() {
 	// 4d. System Integration
 	go journald.StartReader(wp)
 
+	// 4e. Resource Recorder (crash root-cause analysis)
+	rec := recorder.NewResourceRecorder(cfg.SnapshotInterval, cfg.SnapshotFile, cfg.SnapshotMaxCount)
+	rec.Register(prometheus.DefaultRegisterer)
+	rec.Start()
+	log.Printf("ResourceRecorder: writing to %s every %ds", cfg.SnapshotFile, cfg.SnapshotInterval)
+
 	// 5. REST API for UI
-	apiHandler := api.NewAPI(cfg)
+	apiHandler := api.NewAPI(cfg, rec)
 	mux := http.DefaultServeMux
 	apiHandler.RegisterRoutes(mux)
 
