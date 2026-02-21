@@ -10,6 +10,8 @@ import (
 // NginxParser implements LogParser interface
 type NginxParser struct{}
 
+func init() { Register("nginx", func() LogParser { return &NginxParser{} }) }
+
 // Common/Combined Log Format Regex
 // IP - User [Time] "Method Path Protocol" Status Bytes "Referer" "UserAgent"
 var nginxRegex = regexp.MustCompile(`^(\S+) - (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+) "([^"]*)" "([^"]*)"`)

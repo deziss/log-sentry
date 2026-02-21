@@ -9,6 +9,8 @@ import (
 
 type TomcatParser struct{}
 
+func init() { Register("tomcat", func() LogParser { return &TomcatParser{} }) }
+
 // Tomcat defaults often resemble Common/Combined but time format might differ or lacks timezone in some configs
 // Assuming pattern: %h %l %u %t "%r" %s %b
 // 127.0.0.1 - - [01/Feb/2026:12:00:00 +0000] "GET /app HTTP/1.1" 200 123

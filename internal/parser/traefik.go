@@ -8,6 +8,8 @@ import (
 
 type TraefikParser struct{}
 
+func init() { Register("traefik", func() LogParser { return &TraefikParser{} }) }
+
 // TraefikJSONEntry represents a Traefik access log line in JSON format
 // Fields based on common Traefik access log structure
 type TraefikJSONEntry struct {

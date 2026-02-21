@@ -1,0 +1,16 @@
+{
+  "services": [
+    {
+      "name": "nginx",
+      "type": "nginx",
+      "log_path": "/var/log/nginx/access.log",
+      "enabled": true
+    },
+    {
+      "name": "ssh",
+      "type": "ssh",
+      "log_path": "/var/log/auth.log",
+      "enabled": true
+    }
+  ]
+}

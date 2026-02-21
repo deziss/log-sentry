@@ -9,6 +9,8 @@ import (
 
 type EnvoyParser struct{}
 
+func init() { Register("envoy", func() LogParser { return &EnvoyParser{} }) }
+
 // Envoy Default Access Log Format
 // [START_TIME] "METHOD PATH PROTOCOL" RESPONSE_CODE RESPONSE_FLAGS BYTES_RECEIVED BYTES_SENT DURATION X-ENVOY-UPSTREAM-SERVICE-TIME "X-FORWARDED-FOR" "USER-AGENT" "REQUEST_ID" "AUTHORITY" "UPSTREAM_HOST"
 // [2016-04-15T20:17:00.310Z] "POST /api/v1/locations HTTP/1.1" 204 - 154 0 226 100 "10.0.35.16" "Mozilla/5.0" "v23-234-234" "authority" "10.0.35.16:8080"

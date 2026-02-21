@@ -10,27 +10,65 @@ import (
 )
 
 type Config struct {
-	NginxAccessLogPath string
-	NginxErrorLogPath  string
-	SSHAuthLogPath     string
 	Port               int
 	GeoIPCityPath      string // Path to GeoLite2-City.mmdb
 	GeoIPASNPath       string // Path to GeoLite2-ASN.mmdb
 	WebhookURL         string // Optional URL for critical alerts e.g. Slack/Discord
 	RulesPath          string // Path to custom rules (e.g., process blacklist)
+	ServicesConfigPath string // Path to services.json
+	Services           []ServiceDef
+}
+
+// ServiceDef defines a single log source to monitor.
+// Configured entirely via services.json — no code changes needed.
+type ServiceDef struct {
+	Name    string `json:"name"`     // Human-readable label e.g. "web-1"
+	Type    string `json:"type"`     // Parser type: "nginx", "apache", "ssh", etc.
+	LogPath string `json:"log_path"` // Absolute path to log file
+	Enabled bool   `json:"enabled"`  // Toggle on/off
+}
+
+type servicesFile struct {
+	Services []ServiceDef `json:"services"`
 }
 
 func Load() *Config {
-	return &Config{
-		NginxAccessLogPath: getEnv("NGINX_ACCESS_LOG_PATH", "/var/log/nginx/access.log"),
-		NginxErrorLogPath:  getEnv("NGINX_ERROR_LOG_PATH", "/var/log/nginx/error.log"),
-		SSHAuthLogPath:     getEnv("SSH_AUTH_LOG_PATH", "/var/log/auth.log"),
+	cfg := &Config{
 		Port:               getEnvInt("PORT", 9102),
-		GeoIPCityPath:      getEnv("GEOIP_CITY_PATH", ""), // Empty means disabled
+		GeoIPCityPath:      getEnv("GEOIP_CITY_PATH", ""),
 		GeoIPASNPath:       getEnv("GEOIP_ASN_PATH", ""),
 		WebhookURL:         getEnv("WEBHOOK_URL", ""),
-		RulesPath:          getEnv("RULES_PATH", "rules.json"), // Default simple JSON for dynamic rules
+		RulesPath:          getEnv("RULES_PATH", "rules.json"),
+		ServicesConfigPath: getEnv("SERVICES_CONFIG", "services.json"),
 	}
+
+	// Load services from JSON
+	if err := cfg.LoadServices(); err != nil {
+		log.Printf("Could not load services config: %v. Using defaults.", err)
+		// Fallback defaults so it still works out of the box
+		cfg.Services = []ServiceDef{
+			{Name: "nginx", Type: "nginx", LogPath: getEnv("NGINX_ACCESS_LOG_PATH", "/var/log/nginx/access.log"), Enabled: true},
+			{Name: "ssh", Type: "ssh", LogPath: getEnv("SSH_AUTH_LOG_PATH", "/var/log/auth.log"), Enabled: true},
+		}
+	}
+	return cfg
+}
+
+// LoadServices reads the services config file
+func (c *Config) LoadServices() error {
+	data, err := os.ReadFile(c.ServicesConfigPath)
+	if err != nil {
+		return err
+	}
+
+	var sf servicesFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return err
+	}
+
+	c.Services = sf.Services
+	log.Printf("Loaded %d service definitions from %s", len(c.Services), c.ServicesConfigPath)
+	return nil
 }
 
 type Rules struct {

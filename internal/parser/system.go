@@ -9,6 +9,8 @@ import (
 // Example: Feb  2 15:04:05 myhost sudo: pam_unix(sudo:session): session opened for user root
 type SystemParser struct{}
 
+func init() { Register("system", func() LogParser { return &SystemParser{} }) }
+
 // Sep  9 22:56:22
 var syslogTimeRegex = regexp.MustCompile(`^([A-Z][a-z]{2}\s+\d+\s\d{2}:\d{2}:\d{2})\s+([^\s]+)\s+([^:]+):\s+(.*)$`)
 

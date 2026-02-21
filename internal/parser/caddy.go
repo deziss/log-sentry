@@ -8,6 +8,8 @@ import (
 
 type CaddyParser struct{}
 
+func init() { Register("caddy", func() LogParser { return &CaddyParser{} }) }
+
 // CaddyJSONEntry reflects the standard structure of Caddy's JSON logs
 type CaddyJSONEntry struct {
 	Level   string  `json:"level"`

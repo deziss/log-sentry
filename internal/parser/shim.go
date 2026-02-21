@@ -9,6 +9,8 @@ import (
 // It assumes the reader already handled the heavy lifting of JSON decoding.
 type JournalShimParser struct{}
 
+func init() { Register("journald", func() LogParser { return &JournalShimParser{} }) }
+
 func (p *JournalShimParser) Parse(line string) (*GenericLogEntry, error) {
 	parts := strings.SplitN(line, ": ", 2)
 	header := parts[0]

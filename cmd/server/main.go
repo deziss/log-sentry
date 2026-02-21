@@ -11,7 +11,6 @@ import (
 	"log-sentry/internal/anomaly"
 	"log-sentry/internal/collector"
 	"log-sentry/internal/config"
-	"log-sentry/internal/discovery"
 	"log-sentry/internal/enricher"
 	"log-sentry/internal/journald"
 	"log-sentry/internal/monitor"
@@ -39,102 +38,62 @@ func main() {
 
 	secAnalyzer := analyzer.NewAnalyzer()
 	anomalyDetector := anomaly.NewAnomalyDetector()
-	autoDisco := discovery.NewAutoDiscover()
 
 	// 2a. Initialize Worker Pool
 	wp := worker.NewPool(5, coll, secAnalyzer, anomalyDetector, enrich)
 	wp.Start()
 
-	// 3. Auto-Discovery
-	log.Println("Running Auto-Discovery...")
-	services, err := autoDisco.Scan()
-	if err != nil {
-		log.Printf("Auto-discovery warning: %v", err)
+	// 3. Start Services from Config (Config-Driven Architecture)
+	log.Printf("Registered parsers: %v", parser.AvailableParsers())
+	log.Printf("Starting %d configured services...", len(cfg.Services))
+
+	for _, svc := range cfg.Services {
+		if !svc.Enabled {
+			log.Printf("  [SKIP] %s (disabled)", svc.Name)
+			continue
+		}
+		if svc.LogPath == "" {
+			log.Printf("  [SKIP] %s (no log_path)", svc.Name)
+			continue
+		}
+
+		// SSH is a special case — it has its own processing pipeline
+		if svc.Type == "ssh" {
+			log.Printf("  [SSH]  %s → %s", svc.Name, svc.LogPath)
+			startSSHMonitoring(svc.LogPath, coll)
+			continue
+		}
+
+		// All other types: resolve parser via registry (polymorphism)
+		p, err := parser.Get(svc.Type)
+		if err != nil {
+			log.Printf("  [ERR]  %s: %v", svc.Name, err)
+			continue
+		}
+		log.Printf("  [OK]   %s (%s) → %s", svc.Name, svc.Type, svc.LogPath)
+		startWebMonitoring(svc.Name, svc.LogPath, p, wp)
 	}
 
 	// 4a. Start Syslog Server (Network Ingestion)
 	syslogServer := syslog.NewSyslogServer(5140, coll, secAnalyzer, enrich)
 	syslogServer.Start()
 
-	// 4b. Start Monitoring for Discovered/Configured Services
-	monitoredCount := 0
-
-	// Helper to start monitoring a web service
-	monitorService := func(name, path string, p parser.LogParser) {
-		if path == "" {
-			return
-		}
-		log.Printf("Monitoring %s logs at: %s", name, path)
-		startWebMonitoring(name, path, p, wp)
-		monitoredCount++
-	}
-
-	// 4c. Auto-Discovered Services
-	for _, svc := range services {
-		log.Printf("Discovered service: %s (PID: %d)", svc.Name, svc.PID)
-		var p parser.LogParser
-		switch svc.Name {
-		case "nginx":
-			p = &parser.NginxParser{}
-		case "apache", "apache2", "httpd":
-			p = &parser.ApacheParser{}
-		case "caddy":
-			p = &parser.CaddyParser{}
-		case "tomcat":
-			p = &parser.TomcatParser{}
-		case "traefik":
-			p = &parser.TraefikParser{}
-		case "haproxy":
-			p = &parser.HAProxyParser{}
-		case "envoy":
-			p = &parser.EnvoyParser{}
-		case "lighttpd":
-			p = &parser.LighttpdParser{}
-		default:
-			log.Printf("No parser for discovered service: %s", svc.Name)
-			continue
-		}
-		
-		// Use discovered path, or fallback to config if env var set for this specific service?
-		// For now, auto-discovery takes precedence if it found a path, 
-		// but our current auto-discover just guesses defaults.
-		// We'll trust the guess for now.
-		monitorService(svc.Name, svc.LogPath, p)
-	}
-
-	// 4b. Explicit Config Fallbacks (if not discovered)
-	// If auto-discovery didn't find Nginx, but ENV is set:
-	if monitoredCount == 0 || cfg.NginxAccessLogPath != "" {
-		// Simple check: if we haven't monitored nginx yet, add it
-		// Real logic would be more complex deduplication.
-		// For verification, we Just Load Configured Paths as "manual" services
-		log.Println("Loading configured log paths...")
-		monitorService("nginx_manual", cfg.NginxAccessLogPath, &parser.NginxParser{})
-	}
-	
-	// 4d. Alerting System
+	// 4b. Alerting System
 	alerter := alerts.NewDispatcher(cfg.WebhookURL)
 
-	// 4e. V2.2 Security Monitors
-	// SSL Monitor (Default check localhost:443)
+	// 4c. Security Monitors
 	sslMon := monitor.NewSSLMonitor()
 	sslMon.Register(prometheus.DefaultRegisterer)
 	sslMon.AddTarget("localhost:443")
-	sslMon.Start(1 * time.Hour) // Check hourly
+	sslMon.Start(1 * time.Hour)
 
-	// File Integrity Monitor (FIM)
-	// Passing alerter so FIM can send webhooks on critical file changes
-	fim := monitor.NewFIM(alerter) 
+	fim := monitor.NewFIM(alerter)
 	fim.Register(prometheus.DefaultRegisterer)
-	fim.AddPath("/etc/passwd") 
-	fim.AddPath(cfg.NginxAccessLogPath) // Just as an example watcher
+	fim.AddPath("/etc/passwd")
 	fim.Start(30 * time.Second)
 
-	// Process Sentinel
 	procSent := monitor.NewProcessSentinel(alerter)
 	procSent.Register(prometheus.DefaultRegisterer)
-	
-	// Dynamic Rules loading for Process Sentinel
 	if r, err := cfg.LoadRules(); err == nil {
 		procSent.UpdateBlacklist(r.ProcessBlacklist)
 	}
@@ -145,15 +104,11 @@ func main() {
 			log.Printf("Failed to reload rules: %v", err)
 		}
 	})
-
 	procSent.Start(30 * time.Second)
 
-	// SSH Monitoring is distinct
-	startSSHMonitoring(cfg.SSHAuthLogPath, coll)
+	// 4d. System Integration
+	go journald.StartReader(wp)
 
-    // 4f. System Integration
-    go journald.StartReader(wp) // Uncomment to enable if journalctl is present
-    
 	// 5. Start HTTP Server
 	http.Handle("/metrics", promhttp.Handler())
 	addr := fmt.Sprintf(":%d", cfg.Port)

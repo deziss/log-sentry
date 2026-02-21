@@ -9,6 +9,8 @@ import (
 
 type HAProxyParser struct{}
 
+func init() { Register("haproxy", func() LogParser { return &HAProxyParser{} }) }
+
 // HAProxy HTTP log format (default)
 // Feb  6 12:14:14 localhost haproxy[14389]: 10.0.1.2:33313 [06/Feb/2009:12:14:14.655] frontend backend/srv1 10/0/30/69/109 200 2750 - - ---- 1/1/1/1/0 0/0 "GET /index.html HTTP/1.1"
 // Regex groups:

@@ -9,6 +9,8 @@ import (
 
 type LighttpdParser struct{}
 
+func init() { Register("lighttpd", func() LogParser { return &LighttpdParser{} }) }
+
 // Lighttpd default is Common Log Format
 // 127.0.0.1 - - [01/Feb/2026:12:00:00 +0000] "GET /index.html HTTP/1.0" 200 1234
 var lighttpdRegex = regexp.MustCompile(`^(\S+) \S+ (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+|-)`)

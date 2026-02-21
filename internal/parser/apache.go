@@ -9,6 +9,8 @@ import (
 
 type ApacheParser struct{}
 
+func init() { Register("apache", func() LogParser { return &ApacheParser{} }) }
+
 // Apache Combined Log Format is very similar to Nginx default
 // %h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"
 var apacheRegex = regexp.MustCompile(`^(\S+) \S+ (\S+) \[([^\]]+)\] "(\S+) (\S+) (\S+)" (\d+) (\d+|-) "([^"]*)" "([^"]*)"`)
