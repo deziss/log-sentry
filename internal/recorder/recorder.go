@@ -1,19 +1,25 @@
 package recorder
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+// ── Data Types ───────────────────────────────────────────────────
 
 // ProcessSnapshot captures a single process's resource state
 type ProcessSnapshot struct {
@@ -43,92 +49,278 @@ type Snapshot struct {
 	TotalCPUPct  float64           `json:"total_cpu_pct"`
 	TotalMemPct  float64           `json:"total_mem_pct"`
 	TotalMemGB   float64           `json:"total_mem_gb"`
+	DiskPct      float64           `json:"disk_pct"`
 	GPUs         []GPUSnapshot     `json:"gpus,omitempty"`
 	TopProcesses []ProcessSnapshot `json:"top_processes"`
 	OOMLeaders   []ProcessSnapshot `json:"oom_leaders"`
 }
 
-// ResourceRecorder continuously snapshots system state to a crash-resilient file
-type ResourceRecorder struct {
-	interval  time.Duration
-	filePath  string
-	maxCount  int
-	mu        sync.Mutex
-	snapshots []Snapshot
-
-	// Prometheus metrics
-	snapshotCount prometheus.Counter
-	lastCPU       prometheus.Gauge
-	lastMem       prometheus.Gauge
+// CrashEvent groups a sequence of critical snapshots into one incident
+type CrashEvent struct {
+	ID        string     `json:"id"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   time.Time  `json:"ended_at"`
+	Trigger   string     `json:"trigger"`   // "cpu:94.2%" / "mem:91.3%"
+	Verdict   string     `json:"verdict"`
+	Severity  string     `json:"severity"`
+	Resolved  bool       `json:"resolved"`
+	Snapshots []Snapshot `json:"snapshots"`
 }
 
-func NewResourceRecorder(intervalSec int, filePath string, maxCount int) *ResourceRecorder {
+// ── ResourceRecorder ─────────────────────────────────────────────
+
+// ResourceRecorder monitors system resources; only records full snapshots
+// when CPU/MEM/DISK/GPU exceeds the threshold (storage-efficient).
+type ResourceRecorder struct {
+	interval     time.Duration
+	filePath     string
+	maxEvents    int
+	threshold    float64 // percentage to trigger recording (default: 90)
+	hysteresis   float64 // percentage to stop recording (default: 85)
+	lokiPusher   *LokiPusher
+	webhookURL   string
+	mu           sync.Mutex
+	events       []CrashEvent
+	activeEvent  *CrashEvent // nil when not in critical state
+
+	// Prometheus metrics
+	snapshotCount  prometheus.Counter
+	eventCount     prometheus.Counter
+	lastCPU        prometheus.Gauge
+	lastMem        prometheus.Gauge
+	lastDisk       prometheus.Gauge
+	criticalActive prometheus.Gauge
+}
+
+type RecorderConfig struct {
+	IntervalSec int
+	FilePath    string
+	MaxEvents   int
+	Threshold   float64
+	LokiURL     string
+	WebhookURL  string
+}
+
+func NewResourceRecorder(cfg RecorderConfig) *ResourceRecorder {
+	var loki *LokiPusher
+	if cfg.LokiURL != "" {
+		loki = NewLokiPusher(cfg.LokiURL)
+	}
+	if cfg.Threshold <= 0 {
+		cfg.Threshold = 90
+	}
+	if cfg.MaxEvents <= 0 {
+		cfg.MaxEvents = 100
+	}
 	return &ResourceRecorder{
-		interval:  time.Duration(intervalSec) * time.Second,
-		filePath:  filePath,
-		maxCount:  maxCount,
-		snapshots: make([]Snapshot, 0, maxCount),
+		interval:   time.Duration(cfg.IntervalSec) * time.Second,
+		filePath:   cfg.FilePath,
+		maxEvents:  cfg.MaxEvents,
+		threshold:  cfg.Threshold,
+		hysteresis: cfg.Threshold - 5, // 5% hysteresis band
+		lokiPusher: loki,
+		webhookURL: cfg.WebhookURL,
+		events:     make([]CrashEvent, 0),
 		snapshotCount: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "resource_snapshots_total",
-			Help: "Total number of resource snapshots taken",
+			Help: "Total critical snapshots taken",
+		}),
+		eventCount: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "crash_events_total",
+			Help: "Total crash events detected",
 		}),
 		lastCPU: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "resource_last_cpu_pct",
-			Help: "CPU percentage at last snapshot",
+			Help: "CPU percentage at last poll",
 		}),
 		lastMem: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "resource_last_mem_pct",
-			Help: "Memory percentage at last snapshot",
+			Help: "Memory percentage at last poll",
+		}),
+		lastDisk: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "resource_last_disk_pct",
+			Help: "Disk usage percentage at last poll",
+		}),
+		criticalActive: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "resource_critical_active",
+			Help: "1 if a critical event is actively being recorded",
 		}),
 	}
 }
 
 func (r *ResourceRecorder) Register(reg prometheus.Registerer) {
-	reg.MustRegister(r.snapshotCount, r.lastCPU, r.lastMem)
+	reg.MustRegister(r.snapshotCount, r.eventCount, r.lastCPU, r.lastMem, r.lastDisk, r.criticalActive)
 }
 
-// Start begins the continuous recording loop
+// Start begins the monitoring loop
 func (r *ResourceRecorder) Start() {
-	// Load existing snapshots from disk (crash recovery)
 	r.loadFromDisk()
-	log.Printf("ResourceRecorder: starting (interval=%s, file=%s, max=%d)", r.interval, r.filePath, r.maxCount)
+	log.Printf("ResourceRecorder: threshold=%.0f%%, hysteresis=%.0f%%, interval=%s",
+		r.threshold, r.hysteresis, r.interval)
 
 	go func() {
 		ticker := time.NewTicker(r.interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			r.takeSnapshot()
+			r.poll()
 		}
 	}()
 }
 
-// GetSnapshots returns the last N snapshots (thread-safe)
-func (r *ResourceRecorder) GetSnapshots(n int) []Snapshot {
+// GetEvents returns all crash events (thread-safe)
+func (r *ResourceRecorder) GetEvents() []CrashEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if n <= 0 || n > len(r.snapshots) {
-		n = len(r.snapshots)
-	}
-	start := len(r.snapshots) - n
-	result := make([]Snapshot, n)
-	copy(result, r.snapshots[start:])
+	result := make([]CrashEvent, len(r.events))
+	copy(result, r.events)
 	return result
 }
 
-func (r *ResourceRecorder) takeSnapshot() {
-	snap := Snapshot{
-		Timestamp: time.Now().UTC(),
+// GetEvent returns a single crash event by ID
+func (r *ResourceRecorder) GetEvent(id string) *CrashEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.events {
+		if r.events[i].ID == id {
+			ev := r.events[i]
+			return &ev
+		}
+	}
+	return nil
+}
+
+// GetSnapshots returns combined snapshots from recent events (for forensic page)
+func (r *ResourceRecorder) GetSnapshots(n int) []Snapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var all []Snapshot
+	for _, ev := range r.events {
+		all = append(all, ev.Snapshots...)
+	}
+	if r.activeEvent != nil {
+		all = append(all, r.activeEvent.Snapshots...)
+	}
+	if n <= 0 || n > len(all) {
+		n = len(all)
+	}
+	if n == 0 {
+		return nil
+	}
+	return all[len(all)-n:]
+}
+
+// ── Core Logic ───────────────────────────────────────────────────
+
+func (r *ResourceRecorder) poll() {
+	// Lightweight poll: only read aggregate metrics
+	cpuPct := readCPUUsage()
+	memPct, memGB := readMemInfo()
+	diskPct := readDiskUsage("/")
+
+	// Update Prometheus gauges (always)
+	r.lastCPU.Set(cpuPct)
+	r.lastMem.Set(memPct)
+	r.lastDisk.Set(diskPct)
+
+	// Check GPU (lightweight — single nvidia-smi call)
+	gpus := ReadGPUs()
+	maxGPU := 0.0
+	for _, g := range gpus {
+		if g.MemTotalMB > 0 {
+			pct := float64(g.MemUsedMB) / float64(g.MemTotalMB) * 100
+			if pct > maxGPU {
+				maxGPU = pct
+			}
+		}
 	}
 
-	// 1. Read total CPU/MEM from /proc/meminfo and /proc/stat
-	snap.TotalMemPct, snap.TotalMemGB = readMemInfo()
-	snap.TotalCPUPct = readCPUUsage()
+	// Determine trigger
+	trigger := ""
+	if cpuPct >= r.threshold {
+		trigger = fmt.Sprintf("cpu:%.1f%%", cpuPct)
+	} else if memPct >= r.threshold {
+		trigger = fmt.Sprintf("mem:%.1f%%", memPct)
+	} else if diskPct >= r.threshold {
+		trigger = fmt.Sprintf("disk:%.1f%%", diskPct)
+	} else if maxGPU >= r.threshold {
+		trigger = fmt.Sprintf("gpu:%.1f%%", maxGPU)
+	}
 
-	// 2. Read per-process info from /proc
+	r.mu.Lock()
+	isActive := r.activeEvent != nil
+	r.mu.Unlock()
+
+	if trigger != "" {
+		// CRITICAL: take full snapshot
+		snap := r.takeFullSnapshot(cpuPct, memPct, memGB, diskPct, gpus)
+
+		r.mu.Lock()
+		if r.activeEvent == nil {
+			// Start new crash event
+			r.activeEvent = &CrashEvent{
+				ID:        generateID(),
+				StartedAt: snap.Timestamp,
+				Trigger:   trigger,
+			}
+			r.eventCount.Inc()
+			r.criticalActive.Set(1)
+			log.Printf("🚨 CRITICAL: Threshold breached → %s (starting crash event %s)", trigger, r.activeEvent.ID)
+		}
+		r.activeEvent.Snapshots = append(r.activeEvent.Snapshots, snap)
+		r.activeEvent.EndedAt = snap.Timestamp
+		r.mu.Unlock()
+
+		r.snapshotCount.Inc()
+
+		// Push to Loki
+		if r.lokiPusher != nil {
+			go r.lokiPusher.Push(trigger, snap)
+		}
+
+		// Send webhook on first detection
+		if !isActive && r.webhookURL != "" {
+			go sendWebhookAlert(r.webhookURL, trigger, snap)
+		}
+
+	} else if isActive {
+		// Check hysteresis: only close event if ALL metrics below hysteresis
+		if cpuPct < r.hysteresis && memPct < r.hysteresis && diskPct < r.hysteresis && maxGPU < r.hysteresis {
+			r.mu.Lock()
+			event := r.activeEvent
+			// Run forensic analysis on the event
+			report := Analyze(event.Snapshots)
+			event.Verdict = report.Verdict
+			event.Severity = report.Severity
+			event.Resolved = true
+			r.events = append(r.events, *event)
+			if len(r.events) > r.maxEvents {
+				r.events = r.events[len(r.events)-r.maxEvents:]
+			}
+			r.activeEvent = nil
+			r.criticalActive.Set(0)
+			log.Printf("✅ RESOLVED: Crash event %s ended (%d snapshots, verdict: %s)",
+				event.ID, len(event.Snapshots), event.Severity)
+			r.mu.Unlock()
+
+			r.persistToDisk()
+		}
+	}
+}
+
+func (r *ResourceRecorder) takeFullSnapshot(cpuPct, memPct, memGB, diskPct float64, gpus []GPUSnapshot) Snapshot {
+	snap := Snapshot{
+		Timestamp:   time.Now().UTC(),
+		TotalCPUPct: cpuPct,
+		TotalMemPct: memPct,
+		TotalMemGB:  memGB,
+		DiskPct:     diskPct,
+		GPUs:        gpus,
+	}
+
+	// Read all processes (expensive — only done during critical state)
 	procs := readAllProcesses()
 
-	// 3. GPU info (best-effort)
-	snap.GPUs = ReadGPUs()
+	// Attach GPU memory per process
 	gpuMem := ReadGPUProcesses()
 	for i := range procs {
 		if mem, ok := gpuMem[procs[i].PID]; ok {
@@ -136,42 +328,29 @@ func (r *ResourceRecorder) takeSnapshot() {
 		}
 	}
 
-	// 4. Top 20 by CPU
+	// Top 20 by CPU
 	sort.Slice(procs, func(i, j int) bool { return procs[i].CPUPct > procs[j].CPUPct })
 	topCPU := take(procs, 20)
 
-	// 5. Top 20 by Memory
+	// Top 20 by Memory
 	sort.Slice(procs, func(i, j int) bool { return procs[i].MemRSSMB > procs[j].MemRSSMB })
 	topMem := take(procs, 20)
 
-	// 6. Merge & dedup
 	snap.TopProcesses = dedup(append(topCPU, topMem...))
 
-	// 7. OOM leaders (top 10 by oom_score)
+	// OOM leaders
 	sort.Slice(procs, func(i, j int) bool { return procs[i].OOMScore > procs[j].OOMScore })
 	snap.OOMLeaders = take(procs, 10)
 
-	// 8. Update prometheus
-	r.snapshotCount.Inc()
-	r.lastCPU.Set(snap.TotalCPUPct)
-	r.lastMem.Set(snap.TotalMemPct)
-
-	// 9. Append to ring buffer and fsync to disk
-	r.mu.Lock()
-	r.snapshots = append(r.snapshots, snap)
-	if len(r.snapshots) > r.maxCount {
-		r.snapshots = r.snapshots[len(r.snapshots)-r.maxCount:]
-	}
-	r.mu.Unlock()
-
-	r.persistToDisk()
+	return snap
 }
 
-// persistToDisk writes the full ring buffer as JSONL and fsyncs
+// ── Persistence ──────────────────────────────────────────────────
+
 func (r *ResourceRecorder) persistToDisk() {
 	r.mu.Lock()
-	snaps := make([]Snapshot, len(r.snapshots))
-	copy(snaps, r.snapshots)
+	events := make([]CrashEvent, len(r.events))
+	copy(events, r.events)
 	r.mu.Unlock()
 
 	dir := filepath.Dir(r.filePath)
@@ -186,20 +365,18 @@ func (r *ResourceRecorder) persistToDisk() {
 	}
 
 	enc := json.NewEncoder(f)
-	for _, s := range snaps {
-		enc.Encode(s)
+	for _, ev := range events {
+		enc.Encode(ev)
 	}
 
-	// CRITICAL: fsync ensures data survives kernel panic / power loss
 	f.Sync()
 	f.Close()
 }
 
-// loadFromDisk recovers snapshots after a crash
 func (r *ResourceRecorder) loadFromDisk() {
 	data, err := os.ReadFile(r.filePath)
 	if err != nil {
-		return // file doesn't exist yet, that's fine
+		return
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
@@ -207,23 +384,22 @@ func (r *ResourceRecorder) loadFromDisk() {
 		if line == "" {
 			continue
 		}
-		var s Snapshot
-		if err := json.Unmarshal([]byte(line), &s); err == nil {
-			r.snapshots = append(r.snapshots, s)
+		var ev CrashEvent
+		if err := json.Unmarshal([]byte(line), &ev); err == nil {
+			r.events = append(r.events, ev)
 		}
 	}
 
-	if len(r.snapshots) > r.maxCount {
-		r.snapshots = r.snapshots[len(r.snapshots)-r.maxCount:]
+	if len(r.events) > r.maxEvents {
+		r.events = r.events[len(r.events)-r.maxEvents:]
 	}
 
-	if len(r.snapshots) > 0 {
-		log.Printf("ResourceRecorder: recovered %d snapshots from %s (last: %s)",
-			len(r.snapshots), r.filePath, r.snapshots[len(r.snapshots)-1].Timestamp.Format(time.RFC3339))
+	if len(r.events) > 0 {
+		log.Printf("ResourceRecorder: recovered %d crash events from %s", len(r.events), r.filePath)
 	}
 }
 
-// ── /proc readers ────────────────────────────────────────────────
+// ── /proc Readers ────────────────────────────────────────────────
 
 func readMemInfo() (pct float64, totalGB float64) {
 	data, err := os.ReadFile("/proc/meminfo")
@@ -253,15 +429,13 @@ func readMemInfo() (pct float64, totalGB float64) {
 	return
 }
 
-// readCPUUsage reads instantaneous CPU usage from /proc/stat
-// Uses a 100ms sample to measure delta
 func readCPUUsage() float64 {
 	read := func() (idle, total uint64) {
 		data, err := os.ReadFile("/proc/stat")
 		if err != nil {
 			return 0, 0
 		}
-		line := strings.Split(string(data), "\n")[0] // cpu line
+		line := strings.Split(string(data), "\n")[0]
 		fields := strings.Fields(line)
 		if len(fields) < 5 {
 			return 0, 0
@@ -270,7 +444,7 @@ func readCPUUsage() float64 {
 		for i := 1; i < len(fields); i++ {
 			v, _ := strconv.ParseUint(fields[i], 10, 64)
 			sum += v
-			if i == 4 { // idle is field 4
+			if i == 4 {
 				idle = v
 			}
 		}
@@ -289,6 +463,20 @@ func readCPUUsage() float64 {
 	return (1 - idleDelta/totalDelta) * 100
 }
 
+func readDiskUsage(path string) float64 {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0
+	}
+	total := stat.Blocks * uint64(stat.Bsize)
+	free := stat.Bavail * uint64(stat.Bsize)
+	if total == 0 {
+		return 0
+	}
+	used := total - free
+	return float64(used) / float64(total) * 100
+}
+
 func readAllProcesses() []ProcessSnapshot {
 	hostProc := os.Getenv("HOST_PROC")
 	if hostProc == "" {
@@ -304,18 +492,16 @@ func readAllProcesses() []ProcessSnapshot {
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil {
-			continue // not a PID directory
+			continue
 		}
 
 		p := ProcessSnapshot{PID: pid}
 		procDir := filepath.Join(hostProc, entry.Name())
 
-		// Read comm (process name)
 		if comm, err := os.ReadFile(filepath.Join(procDir, "comm")); err == nil {
 			p.Name = strings.TrimSpace(string(comm))
 		}
 
-		// Read cmdline
 		if cmdline, err := os.ReadFile(filepath.Join(procDir, "cmdline")); err == nil {
 			cmd := strings.ReplaceAll(string(cmdline), "\x00", " ")
 			if len(cmd) > 120 {
@@ -324,7 +510,6 @@ func readAllProcesses() []ProcessSnapshot {
 			p.Cmd = strings.TrimSpace(cmd)
 		}
 
-		// Read status for user and memory
 		if status, err := os.ReadFile(filepath.Join(procDir, "status")); err == nil {
 			for _, line := range strings.Split(string(status), "\n") {
 				fields := strings.Fields(line)
@@ -336,23 +521,20 @@ func readAllProcesses() []ProcessSnapshot {
 					p.User = resolveUser(fields[1])
 				case "VmRSS:":
 					rss, _ := strconv.ParseFloat(fields[1], 64)
-					p.MemRSSMB = rss / 1024 // kB → MB
+					p.MemRSSMB = rss / 1024
 				}
 			}
 		}
 
-		// Read OOM score
 		if score, err := os.ReadFile(filepath.Join(procDir, "oom_score")); err == nil {
 			p.OOMScore, _ = strconv.Atoi(strings.TrimSpace(string(score)))
 		}
 
-		// Calculate memory percentage
 		totalMem, _ := readTotalMem()
 		if totalMem > 0 {
 			p.MemPct = p.MemRSSMB / totalMem * 100
 		}
 
-		// Skip kernel threads (no RSS)
 		if p.MemRSSMB > 0 {
 			procs = append(procs, p)
 		}
@@ -371,7 +553,7 @@ func readTotalMem() (float64, error) {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
 				kb, _ := strconv.ParseFloat(fields[1], 64)
-				return kb / 1024, nil // MB
+				return kb / 1024, nil
 			}
 		}
 	}
@@ -390,6 +572,22 @@ func resolveUser(uid string) string {
 		}
 	}
 	return uid
+}
+
+// ── Webhook ──────────────────────────────────────────────────────
+
+func sendWebhookAlert(url, trigger string, snap Snapshot) {
+	if url == "" {
+		return
+	}
+	msg := fmt.Sprintf(`{"content":"🚨 **CRITICAL ALERT** — %s\nCPU: %.1f%% | MEM: %.1f%% | DISK: %.1f%%"}`,
+		trigger, snap.TotalCPUPct, snap.TotalMemPct, snap.DiskPct)
+	resp, err := http.Post(url, "application/json", strings.NewReader(msg))
+	if err != nil {
+		log.Printf("Webhook error: %v", err)
+		return
+	}
+	resp.Body.Close()
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -413,4 +611,10 @@ func dedup(procs []ProcessSnapshot) []ProcessSnapshot {
 		}
 	}
 	return result
+}
+
+func generateID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

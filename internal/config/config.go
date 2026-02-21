@@ -18,10 +18,12 @@ type Config struct {
 	ServicesConfigPath string // Path to services.json
 	Services           []ServiceDef
 
-	// Resource Recorder (crash root-cause analysis)
-	SnapshotInterval int    // seconds between snapshots (default: 5)
-	SnapshotFile     string // path to ring buffer file (default: "snapshots.jsonl")
-	SnapshotMaxCount int    // max snapshots to keep (default: 720 = 1hr at 5s)
+	// Resource Recorder (threshold-based crash detection)
+	SnapshotInterval int     // seconds between polls (default: 5)
+	CrashesFile      string  // path to crash events file (default: "crashes.jsonl")
+	MaxCrashEvents   int     // max crash events to keep (default: 100)
+	Threshold        float64 // percentage to trigger recording (default: 90)
+	LokiURL          string  // Loki push URL (e.g. http://loki:3100)
 }
 
 // ServiceDef defines a single log source to monitor.
@@ -46,8 +48,10 @@ func Load() *Config {
 		RulesPath:          getEnv("RULES_PATH", "rules.json"),
 		ServicesConfigPath: getEnv("SERVICES_CONFIG", "services.json"),
 		SnapshotInterval:   getEnvInt("SNAPSHOT_INTERVAL", 5),
-		SnapshotFile:       getEnv("SNAPSHOT_FILE", "snapshots.jsonl"),
-		SnapshotMaxCount:   getEnvInt("SNAPSHOT_MAX_COUNT", 720),
+		CrashesFile:        getEnv("CRASHES_FILE", "crashes.jsonl"),
+		MaxCrashEvents:     getEnvInt("MAX_CRASH_EVENTS", 100),
+		Threshold:          float64(getEnvInt("THRESHOLD", 90)),
+		LokiURL:            getEnv("LOKI_URL", ""),
 	}
 
 	// Load services from JSON

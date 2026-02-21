@@ -8,6 +8,7 @@ import RulesPage from './pages/Rules';
 import AttackLog from './pages/AttackLog';
 import HealthPage from './pages/Health';
 import ForensicPage from './pages/Forensic';
+import CrashReports from './pages/CrashReports';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -15,7 +16,7 @@ const queryClient = new QueryClient({
   },
 });
 
-type Page = 'dashboard' | 'services' | 'rules' | 'attacks' | 'health' | 'forensic';
+type Page = 'dashboard' | 'services' | 'rules' | 'attacks' | 'health' | 'forensic' | 'crashes';
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
@@ -28,6 +29,7 @@ export default function App() {
       case 'attacks': return <AttackLog />;
       case 'health': return <HealthPage />;
       case 'forensic': return <ForensicPage />;
+      case 'crashes': return <CrashReports />;
     }
   };
 

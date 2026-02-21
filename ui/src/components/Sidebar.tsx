@@ -1,4 +1,4 @@
-import { Shield, Server, ShieldAlert, Activity, Heart, Crosshair, type LucideIcon } from 'lucide-react';
+import { Shield, Server, ShieldAlert, Activity, Heart, Crosshair, Flame, type LucideIcon } from 'lucide-react';
 
 interface SidebarProps {
   current: string;
@@ -11,6 +11,7 @@ const navItems: { id: string; label: string; icon: LucideIcon }[] = [
   { id: 'rules', label: 'Rules', icon: Shield },
   { id: 'attacks', label: 'Attack Log', icon: ShieldAlert },
   { id: 'forensic', label: 'Forensic', icon: Crosshair },
+  { id: 'crashes', label: 'Crash Reports', icon: Flame },
   { id: 'health', label: 'Health', icon: Heart },
 ];
 

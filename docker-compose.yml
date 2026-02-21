@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   log-sentry:
     build: .
@@ -17,14 +15,20 @@ services:
       - ./logs/envoy:/var/log/envoy
       - ./logs/lighttpd:/var/log/lighttpd
       - ./logs/ssh:/var/log/ssh_logs
-      # Config files (editable from host)
       - ./services.json:/app/services.json
       - ./rules.json:/app/rules.json
-      # Host /proc for process monitoring
       - /proc:/host/proc:ro
     environment:
       - HOST_PROC=/host/proc
       - PORT=9102
+      - LOKI_URL=http://loki:3100
+      - THRESHOLD=95
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3101:3100"
+    command: -config.file=/etc/loki/local-config.yaml
 
   prometheus:
     image: prom/prometheus:latest

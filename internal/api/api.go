@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"log-sentry/internal/config"
 	"log-sentry/internal/parser"
@@ -33,6 +34,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", a.cors(a.handleHealth))
 	mux.HandleFunc("/api/forensic", a.cors(a.handleForensic))
 	mux.HandleFunc("/api/snapshots", a.cors(a.handleSnapshots))
+	mux.HandleFunc("/api/crashes", a.cors(a.handleCrashes))
 }
 
 // ── CORS middleware ──────────────────────────────────────────────
@@ -265,13 +267,13 @@ func contains(s []string, e string) bool {
 // ── Forensic Analysis ────────────────────────────────────────────
 
 func (a *API) handleForensic(w http.ResponseWriter, _ *http.Request) {
-	snaps := a.Recorder.GetSnapshots(0) // all snapshots
+	snaps := a.Recorder.GetSnapshots(0)
 	report := recorder.Analyze(snaps)
 	writeJSON(w, http.StatusOK, report)
 }
 
 func (a *API) handleSnapshots(w http.ResponseWriter, r *http.Request) {
-	n := 60 // default: last 60 snapshots (5 min at 5s intervals)
+	n := 60
 	if q := r.URL.Query().Get("last"); q != "" {
 		if v, err := strconv.Atoi(q); err == nil && v > 0 {
 			n = v
@@ -279,4 +281,47 @@ func (a *API) handleSnapshots(w http.ResponseWriter, r *http.Request) {
 	}
 	snaps := a.Recorder.GetSnapshots(n)
 	writeJSON(w, http.StatusOK, snaps)
+}
+
+// ── Crash Events ─────────────────────────────────────────────────
+
+func (a *API) handleCrashes(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id != "" {
+		// Single event detail
+		event := a.Recorder.GetEvent(id)
+		if event == nil {
+			http.Error(w, "Crash event not found", http.StatusNotFound)
+			return
+		}
+		// Enrich with forensic analysis
+		report := recorder.Analyze(event.Snapshots)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"event":  event,
+			"report": report,
+		})
+		return
+	}
+	// List all events (summary only — no snapshots)
+	events := a.Recorder.GetEvents()
+	type summary struct {
+		ID        string `json:"id"`
+		StartedAt string `json:"started_at"`
+		EndedAt   string `json:"ended_at"`
+		Trigger   string `json:"trigger"`
+		Verdict   string `json:"verdict"`
+		Severity  string `json:"severity"`
+		Resolved  bool   `json:"resolved"`
+		Snapshots int    `json:"snapshot_count"`
+	}
+	var summaries []summary
+	for _, ev := range events {
+		summaries = append(summaries, summary{
+			ID: ev.ID, StartedAt: ev.StartedAt.Format(time.RFC3339),
+			EndedAt: ev.EndedAt.Format(time.RFC3339), Trigger: ev.Trigger,
+			Verdict: ev.Verdict, Severity: ev.Severity, Resolved: ev.Resolved,
+			Snapshots: len(ev.Snapshots),
+		})
+	}
+	writeJSON(w, http.StatusOK, summaries)
 }

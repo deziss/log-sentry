@@ -111,11 +111,18 @@ func main() {
 	// 4d. System Integration
 	go journald.StartReader(wp)
 
-	// 4e. Resource Recorder (crash root-cause analysis)
-	rec := recorder.NewResourceRecorder(cfg.SnapshotInterval, cfg.SnapshotFile, cfg.SnapshotMaxCount)
+	// 4e. Resource Recorder (threshold-based crash detection)
+	rec := recorder.NewResourceRecorder(recorder.RecorderConfig{
+		IntervalSec: cfg.SnapshotInterval,
+		FilePath:    cfg.CrashesFile,
+		MaxEvents:   cfg.MaxCrashEvents,
+		Threshold:   cfg.Threshold,
+		LokiURL:     cfg.LokiURL,
+		WebhookURL:  cfg.WebhookURL,
+	})
 	rec.Register(prometheus.DefaultRegisterer)
 	rec.Start()
-	log.Printf("ResourceRecorder: writing to %s every %ds", cfg.SnapshotFile, cfg.SnapshotInterval)
+	log.Printf("ResourceRecorder: threshold=%.0f%%, file=%s, loki=%s", cfg.Threshold, cfg.CrashesFile, cfg.LokiURL)
 
 	// 5. REST API for UI
 	apiHandler := api.NewAPI(cfg, rec)
