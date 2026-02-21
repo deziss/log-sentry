@@ -1,0 +1,10 @@
+{
+  "ProcessBlacklist": [
+    "nc",
+    "nmap",
+    "hydra",
+    "john",
+    "xmrig",
+    "cryptominer"
+  ]
+}

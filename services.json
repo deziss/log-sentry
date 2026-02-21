@@ -9,7 +9,7 @@
     {
       "name": "ssh",
       "type": "ssh",
-      "log_path": "/var/log/auth.log",
+      "log_path": "/var/log/ssh_logs/auth.log",
       "enabled": true
     }
   ]

@@ -8,7 +8,6 @@ services:
       - "5140:5140/udp"
       - "5140:5140/tcp"
     volumes:
-      # Mount host logs (adjust paths as needed or use dummy logs for testing)
       - ./logs/nginx:/var/log/nginx
       - ./logs/apache2:/var/log/apache2
       - ./logs/caddy:/var/log/caddy
@@ -18,14 +17,13 @@ services:
       - ./logs/envoy:/var/log/envoy
       - ./logs/lighttpd:/var/log/lighttpd
       - ./logs/ssh:/var/log/ssh_logs
-      # Mount /proc as /host/proc (ro) to avoid overwriting container's /proc
+      # Config files (editable from host)
+      - ./services.json:/app/services.json
+      - ./rules.json:/app/rules.json
+      # Host /proc for process monitoring
       - /proc:/host/proc:ro
     environment:
       - HOST_PROC=/host/proc
-      # Manual overrides if auto-discovery fails or needs forcing
-      - NGINX_ACCESS_LOG_PATH=/var/log/nginx/access.log
-      - APACHE_ACCESS_LOG_PATH=/var/log/apache2/access.log
-      - SSH_AUTH_LOG_PATH=/var/log/ssh_logs/auth.log
       - PORT=9102
 
   prometheus:
