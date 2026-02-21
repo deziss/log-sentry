@@ -19,3 +19,4 @@ envoy
 
 # Metrics snapshots
 metrics_*.txt
+ui/node_modules

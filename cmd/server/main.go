@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"log-sentry/internal/alerts"
+	"log-sentry/internal/api"
 	"log-sentry/internal/analyzer"
 	"log-sentry/internal/anomaly"
 	"log-sentry/internal/collector"
@@ -109,9 +110,20 @@ func main() {
 	// 4d. System Integration
 	go journald.StartReader(wp)
 
-	// 5. Start HTTP Server
-	http.Handle("/metrics", promhttp.Handler())
+	// 5. REST API for UI
+	apiHandler := api.NewAPI(cfg)
+	mux := http.DefaultServeMux
+	apiHandler.RegisterRoutes(mux)
+
+	// 6. Prometheus Metrics
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// 7. Serve Frontend (static files from ui/dist)
+	fs := http.FileServer(http.Dir("ui/dist"))
+	mux.Handle("/", fs)
+
 	addr := fmt.Sprintf(":%d", cfg.Port)
+	log.Printf("HTTP server listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
