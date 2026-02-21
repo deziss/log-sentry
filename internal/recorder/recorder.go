@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -63,8 +64,14 @@ type CrashEvent struct {
 	Trigger   string     `json:"trigger"`   // "cpu:94.2%" / "mem:91.3%"
 	Verdict   string     `json:"verdict"`
 	Severity  string     `json:"severity"`
-	Resolved  bool       `json:"resolved"`
-	Snapshots []Snapshot `json:"snapshots"`
+	Resolved  bool                  `json:"resolved"`
+	Snapshots []Snapshot            `json:"snapshots"`
+	ProcessDetails map[int]ProcessDetail `json:"process_details,omitempty"`
+}
+
+type ProcessDetail struct {
+	ExePath string `json:"exe_path"`
+	Logs    string `json:"logs"`
 }
 
 // ── ResourceRecorder ─────────────────────────────────────────────
@@ -292,6 +299,9 @@ func (r *ResourceRecorder) poll() {
 			event.Verdict = report.Verdict
 			event.Severity = report.Severity
 			event.Resolved = true
+            
+			r.fetchProcessDetails(event)
+
 			r.events = append(r.events, *event)
 			if len(r.events) > r.maxEvents {
 				r.events = r.events[len(r.events)-r.maxEvents:]
@@ -343,6 +353,46 @@ func (r *ResourceRecorder) takeFullSnapshot(cpuPct, memPct, memGB, diskPct float
 	snap.OOMLeaders = take(procs, 10)
 
 	return snap
+}
+
+func (r *ResourceRecorder) fetchProcessDetails(event *CrashEvent) {
+	if event.ProcessDetails == nil {
+		event.ProcessDetails = make(map[int]ProcessDetail)
+	}
+
+	if len(event.Snapshots) == 0 {
+		return
+	}
+	lastSnap := event.Snapshots[len(event.Snapshots)-1]
+
+	pids := make(map[int]bool)
+	for _, p := range lastSnap.TopProcesses {
+		pids[p.PID] = true
+	}
+	for _, p := range lastSnap.OOMLeaders {
+		pids[p.PID] = true
+	}
+
+	for pid := range pids {
+		var detail ProcessDetail
+
+		exeLink := fmt.Sprintf("/host/proc/%d/exe", pid)
+		if path, err := os.Readlink(exeLink); err == nil {
+			detail.ExePath = path
+		}
+
+		cmd := exec.Command("journalctl", fmt.Sprintf("_PID=%d", pid), "-n", "50", "--no-pager")
+		if out, err := cmd.CombinedOutput(); err == nil && len(out) > 0 {
+			detail.Logs = string(out)
+		} else if detail.ExePath != "" {
+			cmd2 := exec.Command("journalctl", fmt.Sprintf("_EXE=%s", detail.ExePath), "-n", "50", "--no-pager")
+			if out2, err := cmd2.CombinedOutput(); err == nil && len(out2) > 0 {
+				detail.Logs = string(out2)
+			}
+		}
+
+		event.ProcessDetails[pid] = detail
+	}
 }
 
 // ── Persistence ──────────────────────────────────────────────────

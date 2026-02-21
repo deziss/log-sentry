@@ -18,6 +18,9 @@ services:
       - ./services.json:/app/services.json
       - ./rules.json:/app/rules.json
       - /proc:/host/proc:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
     environment:
       - HOST_PROC=/host/proc
       - PORT=9102

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Clock, TrendingUp, ChevronRight, Cpu, HardDrive, Crosshair } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
@@ -20,7 +20,7 @@ interface ForensicReport {
   oom_leaders: ProcessSnapshot[]; gpus?: GPUSnapshot[]; spike_detected: boolean;
 }
 interface CrashDetail {
-  event: { id: string; started_at: string; ended_at: string; trigger: string; verdict: string; severity: string; resolved: boolean; snapshots: any[]; };
+  event: { id: string; started_at: string; ended_at: string; trigger: string; verdict: string; severity: string; resolved: boolean; snapshots: any[]; process_details?: Record<number, { exe_path: string; logs: string }>; };
   report: ForensicReport;
 }
 
@@ -163,7 +163,7 @@ function CrashDetailView({ detail, onBack }: { detail: CrashDetail; onBack: () =
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="glass-card">
           <h3 className="text-sm font-semibold text-gray-300 mb-4">Top Memory at Crash</h3>
-          <ProcTable procs={report.top_mem || []} />
+          <ProcTable procs={report.top_mem || []} details={event.process_details} />
         </div>
         <div className="glass-card">
           <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
@@ -187,7 +187,9 @@ function CrashDetailView({ detail, onBack }: { detail: CrashDetail; onBack: () =
   );
 }
 
-function ProcTable({ procs }: { procs: ProcessSnapshot[] }) {
+function ProcTable({ procs, details }: { procs: ProcessSnapshot[], details?: Record<number, { exe_path: string; logs: string }> }) {
+  const [expandedPid, setExpandedPid] = useState<number | null>(null);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -199,15 +201,46 @@ function ProcTable({ procs }: { procs: ProcessSnapshot[] }) {
           <th className="text-right px-2 py-1.5 text-xs text-gray-400 uppercase">OOM</th>
         </tr></thead>
         <tbody>
-          {procs.slice(0, 10).map((p, i) => (
-            <tr key={`${p.pid}-${i}`} className="border-b border-white/5">
-              <td className="px-2 py-1.5"><span className="text-sm text-white">{p.name}</span><span className="text-xs text-gray-500 ml-1">:{p.pid}</span></td>
-              <td className="px-2 py-1.5 text-sm text-gray-400">{p.user}</td>
-              <td className="px-2 py-1.5 text-sm text-right font-mono text-gray-300">{p.mem_rss_mb.toFixed(0)}M</td>
-              <td className="px-2 py-1.5 text-sm text-right"><span className={p.mem_pct > 20 ? 'text-red-400 font-bold' : 'text-gray-300'}>{p.mem_pct.toFixed(1)}%</span></td>
-              <td className="px-2 py-1.5 text-sm text-right"><span className={p.oom_score > 800 ? 'text-red-400 font-bold' : 'text-gray-400'}>{p.oom_score}</span></td>
-            </tr>
-          ))}
+          {procs.slice(0, 10).map((p, i) => {
+            const hasDetail = details && details[p.pid];
+            const isExpanded = expandedPid === p.pid;
+            return (
+              <Fragment key={`${p.pid}-${i}`}>
+                <tr className={`border-b border-white/5 ${hasDetail ? 'cursor-pointer hover:bg-white/5' : ''}`} onClick={() => hasDetail && setExpandedPid(isExpanded ? null : p.pid)}>
+                  <td className="px-2 py-1.5 flex items-center gap-2">
+                    {hasDetail && <ChevronRight className={`w-3 h-3 text-gray-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />}
+                    <span className="text-sm text-white">{p.name}</span><span className="text-xs text-gray-500 ml-1">:{p.pid}</span>
+                  </td>
+                  <td className="px-2 py-1.5 text-sm text-gray-400">{p.user}</td>
+                  <td className="px-2 py-1.5 text-sm text-right font-mono text-gray-300">{p.mem_rss_mb.toFixed(0)}M</td>
+                  <td className="px-2 py-1.5 text-sm text-right"><span className={p.mem_pct > 20 ? 'text-red-400 font-bold' : 'text-gray-300'}>{p.mem_pct.toFixed(1)}%</span></td>
+                  <td className="px-2 py-1.5 text-sm text-right"><span className={p.oom_score > 800 ? 'text-red-400 font-bold' : 'text-gray-400'}>{p.oom_score}</span></td>
+                </tr>
+                {isExpanded && hasDetail && (
+                  <tr className="border-b border-white/5 bg-black/20">
+                    <td colSpan={5} className="p-4">
+                      <div className="space-y-3">
+                        {details[p.pid].exe_path && (
+                          <div>
+                            <span className="text-xs text-gray-500 uppercase font-semibold">Executable Path</span>
+                            <div className="font-mono text-xs text-blue-300 mt-1 break-all bg-black/40 p-2 rounded border border-white/5">{details[p.pid].exe_path}</div>
+                          </div>
+                        )}
+                        {details[p.pid].logs && (
+                          <div>
+                            <span className="text-xs text-gray-500 uppercase font-semibold">Recent Journal Logs</span>
+                            <pre className="font-mono text-[10px] text-gray-300 mt-1 overflow-x-auto bg-black/40 p-3 rounded border border-white/5 max-h-60 overflow-y-auto whitespace-pre-wrap">
+                              {details[p.pid].logs}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
       {procs.length === 0 && <div className="py-6 text-center text-gray-500">No data</div>}

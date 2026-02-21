@@ -22,7 +22,9 @@ COPY . .
 RUN go build -o log-sentry ./cmd/server
 
 # Stage 3: Runtime
-FROM alpine:latest
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y systemd && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
