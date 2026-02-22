@@ -1,12 +1,9 @@
 import { useState, Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, Clock, TrendingUp, ChevronRight, Cpu, HardDrive, Crosshair } from 'lucide-react';
+import { AlertTriangle, Clock, TrendingUp, ChevronRight, Cpu, HardDrive, Crosshair, ChevronLeft, Filter } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
+import { fetchCrashes, type PaginatedResult, type CrashSummary } from '../api';
 
-interface CrashSummary {
-  id: string; started_at: string; ended_at: string; trigger: string;
-  verdict: string; severity: string; resolved: boolean; snapshot_count: number;
-}
 interface ProcessSnapshot {
   pid: number; user: string; name: string; cmd: string;
   cpu_pct: number; mem_pct: number; mem_rss_mb: number; gpu_mem_mb?: number; oom_score: number;
@@ -35,9 +32,13 @@ const tooltipStyle = { background: 'var(--tooltip-bg)', border: '1px solid var(-
 
 export default function CrashReports() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [sevFilter, setSevFilter] = useState('');
 
-  const { data: crashes } = useQuery<CrashSummary[]>({
-    queryKey: ['crashes'], queryFn: () => fetch('/api/crashes').then(r => r.json()), refetchInterval: 5000,
+  const { data: result } = useQuery<PaginatedResult<CrashSummary>>({
+    queryKey: ['crashes', page, sevFilter],
+    queryFn: () => fetchCrashes(page, 20, sevFilter),
+    refetchInterval: 5000,
   });
 
   const { data: detail } = useQuery<CrashDetail>({
@@ -48,24 +49,38 @@ export default function CrashReports() {
 
   if (selectedId && detail) return <CrashDetailView detail={detail} onBack={() => setSelectedId(null)} />;
 
+  const crashes = result?.items || [];
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-theme-heading">📋 Crash Reports</h1>
-        <p className="text-theme-secondary text-sm mt-1">
-          Only recorded when CPU/MEM/DISK/GPU ≥ 90% — zero storage when healthy
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-theme-heading">📋 Crash Reports</h1>
+          <p className="text-theme-secondary text-sm mt-1">
+            {result ? `${result.total} total events` : 'Loading...'} — persisted in BoltDB
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-theme-muted" />
+          <select value={sevFilter} onChange={e => { setSevFilter(e.target.value); setPage(1); }}
+            className="text-sm rounded-lg px-3 py-1.5" style={{ background: 'var(--card-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)' }}>
+            <option value="">All Severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+          </select>
+        </div>
       </div>
 
-      {(!crashes || crashes.length === 0) ? (
+      {crashes.length === 0 ? (
         <div className="glass-card text-center py-12">
           <div className="text-5xl mb-4">✅</div>
           <h3 className="text-lg font-semibold text-green-400">No Crash Events</h3>
-          <p className="text-theme-muted text-sm mt-1">System has stayed below threshold. No data stored.</p>
+          <p className="text-theme-muted text-sm mt-1">{sevFilter ? `No ${sevFilter} events found.` : 'System has stayed below threshold. No data stored.'}</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {[...crashes].reverse().map(ev => (
+          {crashes.map(ev => (
             <div key={ev.id} onClick={() => setSelectedId(ev.id)}
               className={`glass-card cursor-pointer hover:border-blue-500/30 transition-all border ${SEV_COLORS[ev.severity] || SEV_COLORS.unknown}`}>
               <div className="flex items-center justify-between">
@@ -92,6 +107,23 @@ export default function CrashReports() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {result && result.total_pages > 1 && (
+        <div className="flex items-center justify-center gap-4 pt-2">
+          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
+            className="flex items-center gap-1 text-sm px-3 py-1.5 rounded-lg disabled:opacity-30"
+            style={{ background: 'var(--card-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)' }}>
+            <ChevronLeft className="w-4 h-4" /> Prev
+          </button>
+          <span className="text-sm text-theme-muted">Page {result.page} of {result.total_pages}</span>
+          <button onClick={() => setPage(p => Math.min(result.total_pages, p + 1))} disabled={page >= result.total_pages}
+            className="flex items-center gap-1 text-sm px-3 py-1.5 rounded-lg disabled:opacity-30"
+            style={{ background: 'var(--card-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)' }}>
+            Next <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>

@@ -1,27 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchServices, fetchHealth, fetchRules } from '../api';
+import { fetchServices, fetchHealth, fetchCrashes, fetchStats } from '../api';
 import { Activity, Shield, Server, AlertTriangle, Flame } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const COLORS = ['#3b82f6', '#f97316', '#ef4444', '#eab308', '#22c55e', '#8b5cf6'];
 
-interface CrashSummary {
-  id: string; started_at: string; trigger: string; severity: string; resolved: boolean;
-}
-
 export default function Dashboard() {
   const { data: services, isLoading: loadingSvc } = useQuery({ queryKey: ['services'], queryFn: fetchServices });
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: fetchHealth });
-  const { data: rules } = useQuery({ queryKey: ['rules'], queryFn: fetchRules });
-  const { data: crashes } = useQuery<CrashSummary[]>({
-    queryKey: ['crashes'],
-    queryFn: () => fetch('/api/crashes').then(r => r.json()),
+  const { data: stats } = useQuery({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 5000 });
+  const { data: crashResult } = useQuery({
+    queryKey: ['crashes-dash'],
+    queryFn: () => fetchCrashes(1, 5),
     refetchInterval: 5000,
   });
 
   const enabledServices = services?.filter(s => s.enabled) || [];
   const disabledServices = services?.filter(s => !s.enabled) || [];
-  const recentCrashes = (crashes || []).slice(-3).reverse();
+  const recentCrashes = crashResult?.items || [];
 
   const typeCount: Record<string, number> = {};
   services?.forEach(s => { typeCount[s.type] = (typeCount[s.type] || 0) + 1; });
@@ -38,8 +34,8 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={<Server className="w-5 h-5" />} label="Active Services" value={enabledServices.length} sub={`${disabledServices.length} disabled`} color="text-accent-light" loading={loadingSvc} />
         <StatCard icon={<Activity className="w-5 h-5" />} label="Available Parsers" value={health?.parsers || 0} sub="registered types" color="text-green-400" />
-        <StatCard icon={<Shield className="w-5 h-5" />} label="Process Blacklist" value={rules?.ProcessBlacklist?.length || 0} sub="watched processes" color="text-orange-400" />
-        <StatCard icon={<AlertTriangle className="w-5 h-5" />} label="System Status" value={health?.status === 'ok' ? 'Healthy' : 'Error'} sub="all systems" color={health?.status === 'ok' ? 'text-green-400' : 'text-red-400'} />
+        <StatCard icon={<AlertTriangle className="w-5 h-5" />} label="Crash Events" value={stats?.total_crashes || 0} sub={`${stats?.critical_count || 0} critical`} color="text-red-400" />
+        <StatCard icon={<Shield className="w-5 h-5" />} label="Attacks Logged" value={stats?.total_attacks || 0} sub={stats?.top_attack_type || 'none'} color="text-orange-400" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
