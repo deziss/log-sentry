@@ -19,6 +19,7 @@ var (
 	bucketCrashEvents = []byte("crash_events")
 	bucketCrashMeta   = []byte("crash_meta") // lightweight summaries
 	bucketAttacks     = []byte("attacks")
+	bucketAppState    = []byte("app_state")
 )
 
 // BoltStore implements the Store interface using bbolt.
@@ -42,7 +43,7 @@ func NewBoltStore(path string) (*BoltStore, error) {
 
 	// Create buckets
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketCrashEvents, bucketCrashMeta, bucketAttacks} {
+		for _, b := range [][]byte{bucketCrashEvents, bucketCrashMeta, bucketAttacks, bucketAppState} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -55,7 +56,62 @@ func NewBoltStore(path string) (*BoltStore, error) {
 	}
 
 	log.Printf("BoltStore: opened %s", path)
-	return &BoltStore{db: db}, nil
+	store := &BoltStore{db: db}
+
+	// Unclean shutdown detection
+	err = store.checkAndMarkRunning()
+	if err != nil {
+		log.Printf("BoltStore: warning, failed to process app state: %v", err)
+	}
+
+	return store, nil
+}
+
+// ── App State (Heartbeat) ────────────────────────────────────────
+
+func (s *BoltStore) checkAndMarkRunning() error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAppState)
+		state := b.Get([]byte("status"))
+
+		if state != nil && string(state) == "running" {
+			// Unclean shutdown detected! The app died without calling MarkStopped
+			log.Println("🚨 CRITICAL: Unclean shutdown detected. The application was terminated forcefully or lost power.")
+
+			id := generateStoreID()
+			now := time.Now()
+			
+			// Create a synthetic crash event
+			summary := CrashSummary{
+				ID:            id,
+				StartedAt:     now.Format(time.RFC3339),
+				EndedAt:       now.Format(time.RFC3339),
+				Trigger:       "Forceful Shutdown / Power Loss",
+				Verdict:       "The application was forcefully terminated (e.g., SIGKILL, OOM Killer, or sudden power loss) without a clean exit.",
+				Severity:      "critical",
+				Resolved:      true, // It's a past event
+				SnapshotCount: 0,
+			}
+			
+			meta, _ := json.Marshal(summary)
+			evData := []byte(`{"error":"No snapshots available. System terminated abruptly."}`)
+			
+			tx.Bucket(bucketCrashEvents).Put([]byte(id), evData)
+			tx.Bucket(bucketCrashMeta).Put([]byte(id), meta)
+			log.Printf("BoltStore: Recorded synthetic crash event %s for forceful shutdown.", id)
+		}
+
+		// Mark as running for the current session
+		return b.Put([]byte("status"), []byte("running"))
+	})
+}
+
+// MarkStopped should be called during a graceful shutdown
+func (s *BoltStore) MarkStopped() error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		log.Println("BoltStore: marking state as stopped (clean entry)")
+		return tx.Bucket(bucketAppState).Put([]byte("status"), []byte("stopped"))
+	})
 }
 
 // ── Crash Events ─────────────────────────────────────────────────
@@ -359,6 +415,7 @@ func (s *BoltStore) GetStats() (*AggregatedStats, error) {
 
 func (s *BoltStore) Close() error {
 	log.Println("BoltStore: closing database")
+	s.MarkStopped()
 	return s.db.Close()
 }
 

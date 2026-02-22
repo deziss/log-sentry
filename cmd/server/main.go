@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"log-sentry/internal/alerts"
@@ -146,8 +150,34 @@ func main() {
 	mux.Handle("/", fs)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("HTTP server listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	// 8. Graceful Shutdown
+	go func() {
+		log.Printf("HTTP server listening on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+
+	log.Println("\nReceived shutdown signal. Initiating graceful shutdown...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+
+	log.Println("Graceful shutdown complete. Exiting.")
 }
 
 func startWebMonitoring(service, path string, p parser.LogParser, wp *worker.Pool) {
