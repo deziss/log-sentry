@@ -17,6 +17,7 @@ import (
 	"log-sentry/internal/journald"
 	"log-sentry/internal/monitor"
 	"log-sentry/internal/parser"
+	"log-sentry/internal/storage"
 	"log-sentry/internal/syslog"
 	"log-sentry/internal/tailer"
 	"log-sentry/internal/worker"
@@ -29,6 +30,13 @@ func main() {
 	// 1. Load Configuration (Env vars still override)
 	cfg := config.Load()
 	log.Printf("Starting Log Sentry V2 on port %d...", cfg.Port)
+
+	// 1a. Initialize BoltDB Storage
+	store, err := storage.NewBoltStore(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer store.Close()
 
 	// 2. Initialize Core Components
 	// Enricher needs to be initialized before Collector now
@@ -111,18 +119,19 @@ func main() {
 	// 4d. System Integration
 	go journald.StartReader(wp)
 
-	// 4e. Resource Recorder (threshold-based crash detection)
+	// 4e. Resource Recorder (threshold-based crash detection + BoltDB persistence)
 	rec := recorder.NewResourceRecorder(recorder.RecorderConfig{
-		IntervalSec: cfg.SnapshotInterval,
-		FilePath:    cfg.CrashesFile,
-		MaxEvents:   cfg.MaxCrashEvents,
-		Threshold:   cfg.Threshold,
-		LokiURL:     cfg.LokiURL,
-		WebhookURL:  cfg.WebhookURL,
+		IntervalSec:   cfg.SnapshotInterval,
+		Threshold:     cfg.Threshold,
+		RetentionDays: cfg.RetentionDays,
+		LokiURL:       cfg.LokiURL,
+		WebhookURL:    cfg.WebhookURL,
+		Store:         store,
 	})
 	rec.Register(prometheus.DefaultRegisterer)
 	rec.Start()
-	log.Printf("ResourceRecorder: threshold=%.0f%%, file=%s, loki=%s", cfg.Threshold, cfg.CrashesFile, cfg.LokiURL)
+	log.Printf("ResourceRecorder: threshold=%.0f%%, db=%s, retention=%dd, loki=%s",
+		cfg.Threshold, cfg.DBPath, cfg.RetentionDays, cfg.LokiURL)
 
 	// 5. REST API for UI
 	apiHandler := api.NewAPI(cfg, rec)

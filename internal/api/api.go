@@ -13,6 +13,7 @@ import (
 	"log-sentry/internal/config"
 	"log-sentry/internal/parser"
 	"log-sentry/internal/recorder"
+	"log-sentry/internal/storage"
 )
 
 // API holds shared state for all handlers
@@ -35,6 +36,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/forensic", a.cors(a.handleForensic))
 	mux.HandleFunc("/api/snapshots", a.cors(a.handleSnapshots))
 	mux.HandleFunc("/api/crashes", a.cors(a.handleCrashes))
+	mux.HandleFunc("/api/attacks", a.cors(a.handleAttacks))
+	mux.HandleFunc("/api/stats", a.cors(a.handleStats))
 	mux.HandleFunc("/api/config", a.cors(a.handleConfig))
 }
 
@@ -313,26 +316,91 @@ func (a *API) handleCrashes(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// List all events (summary only — no snapshots)
-	events := a.Recorder.GetEvents()
-	type summary struct {
-		ID        string `json:"id"`
-		StartedAt string `json:"started_at"`
-		EndedAt   string `json:"ended_at"`
-		Trigger   string `json:"trigger"`
-		Verdict   string `json:"verdict"`
-		Severity  string `json:"severity"`
-		Resolved  bool   `json:"resolved"`
-		Snapshots int    `json:"snapshot_count"`
+
+	// Paginated listing from store
+	store := a.Recorder.GetStore()
+	if store != nil {
+		opts := a.parseListOpts(r)
+		result, err := store.ListCrashEvents(opts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
 	}
-	var summaries []summary
-	for _, ev := range events {
-		summaries = append(summaries, summary{
-			ID: ev.ID, StartedAt: ev.StartedAt.Format(time.RFC3339),
-			EndedAt: ev.EndedAt.Format(time.RFC3339), Trigger: ev.Trigger,
-			Verdict: ev.Verdict, Severity: ev.Severity, Resolved: ev.Resolved,
-			Snapshots: len(ev.Snapshots),
-		})
-	}
-	writeJSON(w, http.StatusOK, summaries)
+
+	// Fallback: empty
+	writeJSON(w, http.StatusOK, []interface{}{})
 }
+
+// ── Attack Log ────────────────────────────────────────────────────
+
+func (a *API) handleAttacks(w http.ResponseWriter, r *http.Request) {
+	store := a.Recorder.GetStore()
+	if store == nil {
+		writeJSON(w, http.StatusOK, storage.ListResult[storage.AttackEntry]{
+			Items: []storage.AttackEntry{}, Total: 0, Page: 1, PageSize: 20, TotalPages: 1,
+		})
+		return
+	}
+	opts := a.parseListOpts(r)
+	result, err := store.ListAttacks(opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Stats ────────────────────────────────────────────────────────
+
+func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
+	store := a.Recorder.GetStore()
+	if store == nil {
+		writeJSON(w, http.StatusOK, storage.AggregatedStats{})
+		return
+	}
+	stats, err := store.GetStats()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// ── Query helpers ─────────────────────────────────────────────────
+
+func (a *API) parseListOpts(r *http.Request) storage.ListOpts {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	opts := storage.ListOpts{
+		Page:     page,
+		PageSize: pageSize,
+		Severity: r.URL.Query().Get("severity"),
+		Trigger:  r.URL.Query().Get("trigger"),
+		Service:  r.URL.Query().Get("service"),
+	}
+	if since := r.URL.Query().Get("since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			opts.Since = t
+		} else if t, err := time.Parse("2006-01-02", since); err == nil {
+			opts.Since = t
+		}
+	}
+	if until := r.URL.Query().Get("until"); until != "" {
+		if t, err := time.Parse(time.RFC3339, until); err == nil {
+			opts.Until = t
+		} else if t, err := time.Parse("2006-01-02", until); err == nil {
+			opts.Until = t
+		}
+	}
+	return opts
+}
+

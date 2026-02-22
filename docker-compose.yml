@@ -12,6 +12,7 @@ services:
     volumes:
       - ./logs:/var/log/services
       - ./logs/ssh:/var/log/ssh_logs
+      - ./data:/app/data
       - ./services.json:/app/services.json
       - ./rules.json:/app/rules.json
       - /proc:/host/proc:ro
@@ -25,6 +26,8 @@ services:
       - LOKI_URL=http://loki:3100
       - PROMETHEUS_URL=http://localhost:9090
       - GRAFANA_URL=http://localhost:3100
+      - DB_PATH=data/logsentry.db
+      - RETENTION_DAYS=30
       - THRESHOLD=95
 
 ## Uncomment to enable observability stack

@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"log-sentry/internal/storage"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -87,33 +89,42 @@ type ProcessDetail struct {
 // ResourceRecorder monitors system resources; only records full snapshots
 // when CPU/MEM/DISK/GPU exceeds the threshold (storage-efficient).
 type ResourceRecorder struct {
-	interval     time.Duration
-	filePath     string
-	maxEvents    int
-	threshold    float64 // percentage to trigger recording (default: 90)
-	hysteresis   float64 // percentage to stop recording (default: 85)
-	lokiPusher   *LokiPusher
-	webhookURL   string
-	mu           sync.Mutex
-	events       []CrashEvent
-	activeEvent  *CrashEvent // nil when not in critical state
+	interval      time.Duration
+	threshold     float64 // percentage to trigger recording (default: 90)
+	hysteresis    float64 // percentage to stop recording (default: 85)
+	retentionDays int
+	lokiPusher    *LokiPusher
+	webhookURL    string
+	store         storage.Store
+	mu            sync.Mutex
+	activeEvent   *CrashEvent // nil when not in critical state
 
-	// Prometheus metrics
+	// Prometheus metrics — basic
 	snapshotCount  prometheus.Counter
 	eventCount     prometheus.Counter
 	lastCPU        prometheus.Gauge
 	lastMem        prometheus.Gauge
 	lastDisk       prometheus.Gauge
 	criticalActive prometheus.Gauge
+
+	// Prometheus metrics — enhanced exporter
+	eventDuration     prometheus.Histogram
+	eventsBySeverity  *prometheus.CounterVec
+	eventsByTrigger   *prometheus.CounterVec
+	maxOOMScore       prometheus.Gauge
+	memTotalGB        prometheus.Gauge
+	gpuUtil           *prometheus.GaugeVec
+	gpuMemUsed        *prometheus.GaugeVec
+	gpuTemp           *prometheus.GaugeVec
 }
 
 type RecorderConfig struct {
-	IntervalSec int
-	FilePath    string
-	MaxEvents   int
-	Threshold   float64
-	LokiURL     string
-	WebhookURL  string
+	IntervalSec   int
+	Threshold     float64
+	RetentionDays int
+	LokiURL       string
+	WebhookURL    string
+	Store         storage.Store
 }
 
 func NewResourceRecorder(cfg RecorderConfig) *ResourceRecorder {
@@ -124,18 +135,17 @@ func NewResourceRecorder(cfg RecorderConfig) *ResourceRecorder {
 	if cfg.Threshold <= 0 {
 		cfg.Threshold = 90
 	}
-	if cfg.MaxEvents <= 0 {
-		cfg.MaxEvents = 100
+	if cfg.RetentionDays <= 0 {
+		cfg.RetentionDays = 30
 	}
 	return &ResourceRecorder{
-		interval:   time.Duration(cfg.IntervalSec) * time.Second,
-		filePath:   cfg.FilePath,
-		maxEvents:  cfg.MaxEvents,
-		threshold:  cfg.Threshold,
-		hysteresis: cfg.Threshold - 5, // 5% hysteresis band
-		lokiPusher: loki,
-		webhookURL: cfg.WebhookURL,
-		events:     make([]CrashEvent, 0),
+		interval:      time.Duration(cfg.IntervalSec) * time.Second,
+		threshold:     cfg.Threshold,
+		hysteresis:    cfg.Threshold - 5,
+		retentionDays: cfg.RetentionDays,
+		lokiPusher:    loki,
+		webhookURL:    cfg.WebhookURL,
+		store:         cfg.Store,
 		snapshotCount: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "resource_snapshots_total",
 			Help: "Total critical snapshots taken",
@@ -160,19 +170,57 @@ func NewResourceRecorder(cfg RecorderConfig) *ResourceRecorder {
 			Name: "resource_critical_active",
 			Help: "1 if a critical event is actively being recorded",
 		}),
+		eventDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "crash_event_duration_seconds",
+			Help:    "Duration of crash events in seconds",
+			Buckets: []float64{5, 10, 30, 60, 120, 300, 600, 1800},
+		}),
+		eventsBySeverity: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "crash_events_by_severity_total",
+			Help: "Crash events by severity",
+		}, []string{"severity"}),
+		eventsByTrigger: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "crash_events_by_trigger_total",
+			Help: "Crash events by trigger type",
+		}, []string{"trigger"}),
+		maxOOMScore: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "resource_max_oom_score",
+			Help: "Highest OOM score seen at last poll",
+		}),
+		memTotalGB: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "resource_mem_total_gb",
+			Help: "Total system memory in GB",
+		}),
+		gpuUtil: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "resource_gpu_util_pct",
+			Help: "GPU utilization percentage",
+		}, []string{"gpu_id"}),
+		gpuMemUsed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "resource_gpu_mem_used_mb",
+			Help: "GPU memory used in MB",
+		}, []string{"gpu_id"}),
+		gpuTemp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "resource_gpu_temp_c",
+			Help: "GPU temperature in Celsius",
+		}, []string{"gpu_id"}),
 	}
 }
 
 func (r *ResourceRecorder) Register(reg prometheus.Registerer) {
-	reg.MustRegister(r.snapshotCount, r.eventCount, r.lastCPU, r.lastMem, r.lastDisk, r.criticalActive)
+	reg.MustRegister(
+		r.snapshotCount, r.eventCount, r.lastCPU, r.lastMem, r.lastDisk, r.criticalActive,
+		r.eventDuration, r.eventsBySeverity, r.eventsByTrigger,
+		r.maxOOMScore, r.memTotalGB,
+		r.gpuUtil, r.gpuMemUsed, r.gpuTemp,
+	)
 }
 
 // Start begins the monitoring loop
 func (r *ResourceRecorder) Start() {
-	r.loadFromDisk()
-	log.Printf("ResourceRecorder: threshold=%.0f%%, hysteresis=%.0f%%, interval=%s",
-		r.threshold, r.hysteresis, r.interval)
+	log.Printf("ResourceRecorder: threshold=%.0f%%, hysteresis=%.0f%%, interval=%s, retention=%dd",
+		r.threshold, r.hysteresis, r.interval, r.retentionDays)
 
+	// Monitoring loop
 	go func() {
 		ticker := time.NewTicker(r.interval)
 		defer ticker.Stop()
@@ -180,41 +228,77 @@ func (r *ResourceRecorder) Start() {
 			r.poll()
 		}
 	}()
-}
 
-// GetEvents returns all crash events (thread-safe)
-func (r *ResourceRecorder) GetEvents() []CrashEvent {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	result := make([]CrashEvent, len(r.events))
-	copy(result, r.events)
-	return result
-}
-
-// GetEvent returns a single crash event by ID
-func (r *ResourceRecorder) GetEvent(id string) *CrashEvent {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := range r.events {
-		if r.events[i].ID == id {
-			ev := r.events[i]
-			return &ev
-		}
+	// Retention goroutine: prune old data daily
+	if r.store != nil {
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				ttl := time.Duration(r.retentionDays) * 24 * time.Hour
+				r.store.DeleteOldCrashEvents(ttl)
+				r.store.DeleteOldAttacks(ttl)
+			}
+		}()
 	}
-	return nil
+}
+
+// GetStore returns the underlying store for API handlers
+func (r *ResourceRecorder) GetStore() storage.Store {
+	return r.store
+}
+
+// GetEvent returns a single crash event by ID (from store)
+func (r *ResourceRecorder) GetEvent(id string) *CrashEvent {
+	// Check active event first
+	r.mu.Lock()
+	if r.activeEvent != nil && r.activeEvent.ID == id {
+		ev := *r.activeEvent
+		r.mu.Unlock()
+		return &ev
+	}
+	r.mu.Unlock()
+
+	if r.store == nil {
+		return nil
+	}
+	data, err := r.store.GetCrashEvent(id)
+	if err != nil {
+		return nil
+	}
+	var ev CrashEvent
+	if err := json.Unmarshal(data, &ev); err != nil {
+		return nil
+	}
+	return &ev
 }
 
 // GetSnapshots returns combined snapshots from recent events (for forensic page)
 func (r *ResourceRecorder) GetSnapshots(n int) []Snapshot {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	var all []Snapshot
-	for _, ev := range r.events {
-		all = append(all, ev.Snapshots...)
-	}
 	if r.activeEvent != nil {
 		all = append(all, r.activeEvent.Snapshots...)
 	}
+	r.mu.Unlock()
+
+	// Also pull from last few stored events
+	if r.store != nil {
+		result, err := r.store.ListCrashEvents(storage.ListOpts{Page: 1, PageSize: 10})
+		if err == nil {
+			for _, cs := range result.Items {
+				data, err := r.store.GetCrashEvent(cs.ID)
+				if err != nil {
+					continue
+				}
+				var ev CrashEvent
+				if json.Unmarshal(data, &ev) == nil {
+					all = append(all, ev.Snapshots...)
+				}
+			}
+		}
+	}
+
 	if n <= 0 || n > len(all) {
 		n = len(all)
 	}
@@ -236,11 +320,16 @@ func (r *ResourceRecorder) poll() {
 	r.lastCPU.Set(cpuPct)
 	r.lastMem.Set(memPct)
 	r.lastDisk.Set(diskPct)
+	r.memTotalGB.Set(memGB)
 
 	// Check GPU (lightweight — single nvidia-smi call)
 	gpus := ReadGPUs()
 	maxGPU := 0.0
 	for _, g := range gpus {
+		id := strconv.Itoa(g.ID)
+		r.gpuUtil.WithLabelValues(id).Set(float64(g.UtilPct))
+		r.gpuMemUsed.WithLabelValues(id).Set(float64(g.MemUsedMB))
+		r.gpuTemp.WithLabelValues(id).Set(float64(g.TempC))
 		if g.MemTotalMB > 0 {
 			pct := float64(g.MemUsedMB) / float64(g.MemTotalMB) * 100
 			if pct > maxGPU {
@@ -269,6 +358,14 @@ func (r *ResourceRecorder) poll() {
 		// CRITICAL: take full snapshot
 		snap := r.takeFullSnapshot(cpuPct, memPct, memGB, diskPct, gpus)
 
+		// Track max OOM score
+		for _, p := range snap.OOMLeaders {
+			if float64(p.OOMScore) > 0 {
+				r.maxOOMScore.Set(float64(p.OOMScore))
+				break // already sorted desc
+			}
+		}
+
 		r.mu.Lock()
 		if r.activeEvent == nil {
 			// Start new crash event
@@ -280,6 +377,11 @@ func (r *ResourceRecorder) poll() {
 			r.eventCount.Inc()
 			r.criticalActive.Set(1)
 			log.Printf("🚨 CRITICAL: Threshold breached → %s (starting crash event %s)", trigger, r.activeEvent.ID)
+
+			// Push crash start to Loki
+			if r.lokiPusher != nil {
+				go r.lokiPusher.PushCrashStart(r.activeEvent)
+			}
 		}
 		r.activeEvent.Snapshots = append(r.activeEvent.Snapshots, snap)
 		r.activeEvent.EndedAt = snap.Timestamp
@@ -287,7 +389,7 @@ func (r *ResourceRecorder) poll() {
 
 		r.snapshotCount.Inc()
 
-		// Push to Loki
+		// Push snapshot to Loki
 		if r.lokiPusher != nil {
 			go r.lokiPusher.Push(trigger, snap)
 		}
@@ -307,20 +409,36 @@ func (r *ResourceRecorder) poll() {
 			event.Verdict = report.Verdict
 			event.Severity = report.Severity
 			event.Resolved = true
-            
+
 			r.fetchProcessDetails(event)
 
-			r.events = append(r.events, *event)
-			if len(r.events) > r.maxEvents {
-				r.events = r.events[len(r.events)-r.maxEvents:]
+			// Enhanced Prometheus metrics
+			duration := event.EndedAt.Sub(event.StartedAt).Seconds()
+			r.eventDuration.Observe(duration)
+			r.eventsBySeverity.WithLabelValues(event.Severity).Inc()
+			triggerType := strings.SplitN(event.Trigger, ":", 2)[0]
+			r.eventsByTrigger.WithLabelValues(triggerType).Inc()
+
+			// Persist to BoltDB
+			if r.store != nil {
+				data, err := json.Marshal(event)
+				if err == nil {
+					if err := r.store.SaveCrashEvent(data, event.ID, event.Severity, event.Trigger, event.StartedAt, event.Resolved, len(event.Snapshots)); err != nil {
+						log.Printf("BoltStore: save error: %v", err)
+					}
+				}
 			}
+
 			r.activeEvent = nil
 			r.criticalActive.Set(0)
-			log.Printf("✅ RESOLVED: Crash event %s ended (%d snapshots, verdict: %s)",
-				event.ID, len(event.Snapshots), event.Severity)
+			log.Printf("✅ RESOLVED: Crash event %s ended (%d snapshots, verdict: %s, duration: %.0fs)",
+				event.ID, len(event.Snapshots), event.Severity, duration)
 			r.mu.Unlock()
 
-			r.persistToDisk()
+			// Push crash resolved to Loki
+			if r.lokiPusher != nil {
+				go r.lokiPusher.PushCrashResolved(event)
+			}
 		}
 	}
 }
@@ -403,57 +521,15 @@ func (r *ResourceRecorder) fetchProcessDetails(event *CrashEvent) {
 	}
 }
 
-// ── Persistence ──────────────────────────────────────────────────
+// ── SaveAttack ────────────────────────────────────────────────────
 
-func (r *ResourceRecorder) persistToDisk() {
-	r.mu.Lock()
-	events := make([]CrashEvent, len(r.events))
-	copy(events, r.events)
-	r.mu.Unlock()
-
-	dir := filepath.Dir(r.filePath)
-	if dir != "" && dir != "." {
-		os.MkdirAll(dir, 0755)
-	}
-
-	f, err := os.Create(r.filePath)
-	if err != nil {
-		log.Printf("ResourceRecorder: write error: %v", err)
+// SaveAttack persists a detected attack event to the store.
+func (r *ResourceRecorder) SaveAttack(entry *storage.AttackEntry) {
+	if r.store == nil {
 		return
 	}
-
-	enc := json.NewEncoder(f)
-	for _, ev := range events {
-		enc.Encode(ev)
-	}
-
-	f.Sync()
-	f.Close()
-}
-
-func (r *ResourceRecorder) loadFromDisk() {
-	data, err := os.ReadFile(r.filePath)
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		var ev CrashEvent
-		if err := json.Unmarshal([]byte(line), &ev); err == nil {
-			r.events = append(r.events, ev)
-		}
-	}
-
-	if len(r.events) > r.maxEvents {
-		r.events = r.events[len(r.events)-r.maxEvents:]
-	}
-
-	if len(r.events) > 0 {
-		log.Printf("ResourceRecorder: recovered %d crash events from %s", len(r.events), r.filePath)
+	if err := r.store.SaveAttack(entry); err != nil {
+		log.Printf("BoltStore: save attack error: %v", err)
 	}
 }
 

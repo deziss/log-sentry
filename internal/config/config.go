@@ -20,10 +20,12 @@ type Config struct {
 
 	// Resource Recorder (threshold-based crash detection)
 	SnapshotInterval int     // seconds between polls (default: 5)
-	CrashesFile      string  // path to crash events file (default: "crashes.jsonl")
-	MaxCrashEvents   int     // max crash events to keep (default: 100)
 	Threshold        float64 // percentage to trigger recording (default: 90)
 	LokiURL          string  // Loki push URL (e.g. http://loki:3100)
+
+	// Storage
+	DBPath        string // path to BoltDB file (default: "data/logsentry.db")
+	RetentionDays int    // days to keep crash/attack data (default: 30)
 }
 
 // ServiceDef defines a single log source to monitor.
@@ -48,10 +50,10 @@ func Load() *Config {
 		RulesPath:          getEnv("RULES_PATH", "rules.json"),
 		ServicesConfigPath: getEnv("SERVICES_CONFIG", "services.json"),
 		SnapshotInterval:   getEnvInt("SNAPSHOT_INTERVAL", 5),
-		CrashesFile:        getEnv("CRASHES_FILE", "crashes.jsonl"),
-		MaxCrashEvents:     getEnvInt("MAX_CRASH_EVENTS", 100),
 		Threshold:          float64(getEnvInt("THRESHOLD", 90)),
 		LokiURL:            getEnv("LOKI_URL", ""),
+		DBPath:             getEnv("DB_PATH", "data/logsentry.db"),
+		RetentionDays:      getEnvInt("RETENTION_DAYS", 30),
 	}
 
 	// Load services from JSON

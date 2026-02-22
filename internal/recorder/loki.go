@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"log-sentry/internal/storage"
 )
 
 // LokiPusher sends log entries to Loki's HTTP push API
@@ -32,29 +34,105 @@ type lokiStream struct {
 	Values [][]string        `json:"values"`
 }
 
-// Push sends a critical snapshot to Loki
+// Push sends a critical snapshot to Loki (structured JSON)
 func (l *LokiPusher) Push(trigger string, snap Snapshot) {
 	if l == nil {
 		return
 	}
 
-	// Build log line with structured process data
-	topProcs := ""
+	// Build structured JSON log line
+	topProcs := make([]map[string]interface{}, 0, 5)
 	for i, p := range snap.TopProcesses {
 		if i >= 5 {
 			break
 		}
-		topProcs += fmt.Sprintf(" [%s pid=%d user=%s mem=%.1f%% rss=%.0fMB oom=%d]",
-			p.Name, p.PID, p.User, p.MemPct, p.MemRSSMB, p.OOMScore)
+		topProcs = append(topProcs, map[string]interface{}{
+			"name": p.Name, "pid": p.PID, "user": p.User,
+			"mem_pct": p.MemPct, "rss_mb": p.MemRSSMB, "oom": p.OOMScore,
+		})
 	}
 
-	logLine := fmt.Sprintf("CRITICAL trigger=%s cpu=%.1f%% mem=%.1f%% disk=%.1f%% totalMemGB=%.1f%s",
-		trigger, snap.TotalCPUPct, snap.TotalMemPct, snap.DiskPct, snap.TotalMemGB, topProcs)
+	logEntry := map[string]interface{}{
+		"type":         "snapshot",
+		"trigger":      trigger,
+		"cpu_pct":      snap.TotalCPUPct,
+		"mem_pct":      snap.TotalMemPct,
+		"disk_pct":     snap.DiskPct,
+		"total_mem_gb": snap.TotalMemGB,
+		"top_procs":    topProcs,
+	}
 
 	// Add GPU info
-	for _, g := range snap.GPUs {
-		logLine += fmt.Sprintf(" gpu%d_util=%d%% gpu%d_mem=%d/%dMB gpu%d_temp=%dC",
-			g.ID, g.UtilPct, g.ID, g.MemUsedMB, g.MemTotalMB, g.ID, g.TempC)
+	if len(snap.GPUs) > 0 {
+		gpus := make([]map[string]interface{}, len(snap.GPUs))
+		for i, g := range snap.GPUs {
+			gpus[i] = map[string]interface{}{
+				"id": g.ID, "util_pct": g.UtilPct,
+				"mem_used_mb": g.MemUsedMB, "mem_total_mb": g.MemTotalMB, "temp_c": g.TempC,
+			}
+		}
+		logEntry["gpus"] = gpus
+	}
+
+	l.push("critical", trigger, "snapshot", logEntry)
+}
+
+// PushCrashStart sends a crash lifecycle start event to Loki
+func (l *LokiPusher) PushCrashStart(event *CrashEvent) {
+	if l == nil {
+		return
+	}
+	l.push("warning", event.Trigger, "crash_started", map[string]interface{}{
+		"type":       "crash_started",
+		"event_id":   event.ID,
+		"trigger":    event.Trigger,
+		"started_at": event.StartedAt.Format(time.RFC3339),
+	})
+}
+
+// PushCrashResolved sends a crash lifecycle resolved event to Loki
+func (l *LokiPusher) PushCrashResolved(event *CrashEvent) {
+	if l == nil {
+		return
+	}
+	duration := event.EndedAt.Sub(event.StartedAt).Seconds()
+	l.push("info", event.Trigger, "crash_resolved", map[string]interface{}{
+		"type":           "crash_resolved",
+		"event_id":       event.ID,
+		"trigger":        event.Trigger,
+		"severity":       event.Severity,
+		"verdict":        event.Verdict,
+		"started_at":     event.StartedAt.Format(time.RFC3339),
+		"ended_at":       event.EndedAt.Format(time.RFC3339),
+		"duration_sec":   duration,
+		"snapshot_count": len(event.Snapshots),
+	})
+}
+
+// PushAttack sends a detected attack event to Loki
+func (l *LokiPusher) PushAttack(entry *storage.AttackEntry) {
+	if l == nil {
+		return
+	}
+	l.push("warning", "attack", "attack", map[string]interface{}{
+		"type":     "attack",
+		"service":  entry.Service,
+		"attack":   entry.Type,
+		"severity": entry.Severity,
+		"source":   entry.SourceIP,
+		"endpoint": entry.Endpoint,
+		"country":  entry.Country,
+		"asn":      entry.ASN,
+		"details":  entry.Details,
+	})
+}
+
+// push is the internal method that sends a structured JSON line to Loki
+func (l *LokiPusher) push(level, trigger, eventType string, data map[string]interface{}) {
+	logLine, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Loki: marshal error: %v", err)
+		return
 	}
 
 	ts := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -63,12 +141,13 @@ func (l *LokiPusher) Push(trigger string, snap Snapshot) {
 		Streams: []lokiStream{
 			{
 				Stream: map[string]string{
-					"job":     "log-sentry",
-					"level":   "critical",
-					"trigger": trigger,
+					"job":        "log-sentry",
+					"level":      level,
+					"trigger":    trigger,
+					"event_type": eventType,
 				},
 				Values: [][]string{
-					{ts, logLine},
+					{ts, string(logLine)},
 				},
 			},
 		},
