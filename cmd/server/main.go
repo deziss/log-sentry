@@ -168,16 +168,30 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	log.Println("\nReceived shutdown signal. Initiating graceful shutdown...")
+	log.Println("\n🚨 SIGTERM received! Delaying exit to capture final system state (max 30s)...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Shut down the HTTP server first to stop accepting new requests
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
 	}
 
-	log.Println("Graceful shutdown complete. Exiting.")
+	// Now loop rapidly and force record state until SIGKILL takes us out
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			log.Println("Maximum survival duration reached. Exiting cleanly.")
+			return
+		case <-ticker.C:
+			// Rapidly record metrics and push to Prometheus/Loki/BoltDB
+			rec.ForcePoll()
+		}
+	}
 }
 
 func startWebMonitoring(service, path string, p parser.LogParser, wp *worker.Pool) {

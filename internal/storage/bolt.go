@@ -81,7 +81,22 @@ func (s *BoltStore) checkAndMarkRunning() error {
 			id := generateStoreID()
 			now := time.Now()
 			
-			// Create a synthetic crash event
+			// Retrieve the last known snapshot
+			var evData []byte
+			snapshotCount := 0
+			latestSnap := b.Get([]byte("latest_snapshot"))
+			
+			if latestSnap != nil {
+				// We have a heartbeat snapshot! Embed it inside a CrashEvent structure
+				snapshotCount = 1
+				// Create a JSON structure that looks like a CrashEvent with one Snapshot
+				evData = []byte(fmt.Sprintf(`{"id":"%s","started_at":"%s","ended_at":"%s","trigger":"Forceful Shutdown / Power Loss","verdict":"The application was forcefully terminated (e.g., SIGKILL, OOM Killer, or sudden power loss) without a clean exit.","severity":"critical","resolved":true,"snapshots":[%s]}`, id, now.Format(time.RFC3339), now.Format(time.RFC3339), string(latestSnap)))
+				log.Println("BoltStore: Attached last known snapshot to forceful shutdown event.")
+			} else {
+				evData = []byte(`{"error":"No snapshots available. System terminated abruptly."}`)
+			}
+
+			// Create a synthetic crash event summary
 			summary := CrashSummary{
 				ID:            id,
 				StartedAt:     now.Format(time.RFC3339),
@@ -90,11 +105,10 @@ func (s *BoltStore) checkAndMarkRunning() error {
 				Verdict:       "The application was forcefully terminated (e.g., SIGKILL, OOM Killer, or sudden power loss) without a clean exit.",
 				Severity:      "critical",
 				Resolved:      true, // It's a past event
-				SnapshotCount: 0,
+				SnapshotCount: snapshotCount,
 			}
 			
 			meta, _ := json.Marshal(summary)
-			evData := []byte(`{"error":"No snapshots available. System terminated abruptly."}`)
 			
 			tx.Bucket(bucketCrashEvents).Put([]byte(id), evData)
 			tx.Bucket(bucketCrashMeta).Put([]byte(id), meta)
@@ -112,6 +126,27 @@ func (s *BoltStore) MarkStopped() error {
 		log.Println("BoltStore: marking state as stopped (clean entry)")
 		return tx.Bucket(bucketAppState).Put([]byte("status"), []byte("stopped"))
 	})
+}
+
+// SaveHeartbeatSnapshot stores the latest system snapshot
+func (s *BoltStore) SaveHeartbeatSnapshot(data []byte) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketAppState).Put([]byte("latest_snapshot"), data)
+	})
+}
+
+// GetHeartbeatSnapshot retrieves the latest system snapshot
+func (s *BoltStore) GetHeartbeatSnapshot() ([]byte, error) {
+	var data []byte
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketAppState).Get([]byte("latest_snapshot"))
+		if v != nil {
+			data = make([]byte, len(v))
+			copy(data, v)
+		}
+		return nil
+	})
+	return data, err
 }
 
 // ── Crash Events ─────────────────────────────────────────────────

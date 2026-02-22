@@ -308,7 +308,11 @@ func (r *ResourceRecorder) GetSnapshots(n int) []Snapshot {
 	return all[len(all)-n:]
 }
 
-// ── Core Logic ───────────────────────────────────────────────────
+// ForcePoll forces an immediate system state poll and heartbeat snapshot write.
+// This is used during graceful shutdown to capture the final moments before exit.
+func (r *ResourceRecorder) ForcePoll() {
+	r.poll()
+}
 
 func (r *ResourceRecorder) poll() {
 	// Lightweight poll: only read aggregate metrics
@@ -350,13 +354,19 @@ func (r *ResourceRecorder) poll() {
 		trigger = fmt.Sprintf("gpu:%.1f%%", maxGPU)
 	}
 
+	// Always take a full snapshot to use as a heartbeat
+	snap := r.takeFullSnapshot(cpuPct, memPct, memGB, diskPct, gpus)
+	if r.store != nil {
+		data, _ := json.Marshal(snap)
+		r.store.SaveHeartbeatSnapshot(data)
+	}
+
 	r.mu.Lock()
 	isActive := r.activeEvent != nil
 	r.mu.Unlock()
 
 	if trigger != "" {
-		// CRITICAL: take full snapshot
-		snap := r.takeFullSnapshot(cpuPct, memPct, memGB, diskPct, gpus)
+		// critical event triggered, snap is already taken
 
 		// Track max OOM score
 		for _, p := range snap.OOMLeaders {

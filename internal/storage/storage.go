@@ -84,5 +84,7 @@ type Store interface {
 	GetStats() (*AggregatedStats, error)
 
 	// Lifecycle
+	SaveHeartbeatSnapshot(data []byte) error
+	GetHeartbeatSnapshot() ([]byte, error)
 	Close() error
 }

@@ -1,6 +1,8 @@
 services:
   log-sentry:
     build: .
+    oom_score_adj: -1000
+    stop_grace_period: 30s
     security_opt:
       - apparmor=unconfined
     cap_add:
