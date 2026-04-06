@@ -43,8 +43,12 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 // ── CORS middleware ──────────────────────────────────────────────
 func (a *API) cors(next http.HandlerFunc) http.HandlerFunc {
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
@@ -266,7 +270,9 @@ func (a *API) handleConfig(w http.ResponseWriter, _ *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("json encode error: %v", err)
+	}
 }
 
 func contains(s []string, e string) bool {
@@ -292,6 +298,9 @@ func (a *API) handleSnapshots(w http.ResponseWriter, r *http.Request) {
 		if v, err := strconv.Atoi(q); err == nil && v > 0 {
 			n = v
 		}
+	}
+	if n > 1000 {
+		n = 1000
 	}
 	snaps := a.Recorder.GetSnapshots(n)
 	writeJSON(w, http.StatusOK, snaps)
@@ -380,12 +389,32 @@ func (a *API) parseListOpts(r *http.Request) storage.ListOpts {
 	if pageSize < 1 {
 		pageSize = 20
 	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	if page > 10000 {
+		page = 10000
+	}
+
+	severity := r.URL.Query().Get("severity")
+	trigger := r.URL.Query().Get("trigger")
+	service := r.URL.Query().Get("service")
+	if len(severity) > 20 {
+		severity = ""
+	}
+	if len(trigger) > 100 {
+		trigger = ""
+	}
+	if len(service) > 100 {
+		service = ""
+	}
+
 	opts := storage.ListOpts{
 		Page:     page,
 		PageSize: pageSize,
-		Severity: r.URL.Query().Get("severity"),
-		Trigger:  r.URL.Query().Get("trigger"),
-		Service:  r.URL.Query().Get("service"),
+		Severity: severity,
+		Trigger:  trigger,
+		Service:  service,
 	}
 	if since := r.URL.Query().Get("since"); since != "" {
 		if t, err := time.Parse(time.RFC3339, since); err == nil {

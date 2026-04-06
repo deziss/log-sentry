@@ -108,8 +108,12 @@ func (s *BoltStore) checkAndMarkRunning() error {
 				SnapshotCount: snapshotCount,
 			}
 			
-			meta, _ := json.Marshal(summary)
-			
+			meta, err := json.Marshal(summary)
+			if err != nil {
+				log.Printf("BoltStore: failed to marshal shutdown summary: %v", err)
+				return b.Put([]byte("status"), []byte("running"))
+			}
+
 			tx.Bucket(bucketCrashEvents).Put([]byte(id), evData)
 			tx.Bucket(bucketCrashMeta).Put([]byte(id), meta)
 			log.Printf("BoltStore: Recorded synthetic crash event %s for forceful shutdown.", id)
@@ -194,10 +198,11 @@ func (s *BoltStore) ListCrashEvents(opts ListOpts) (*ListResult[CrashSummary], e
 
 	var all []CrashSummary
 	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketCrashMeta).ForEach(func(_, v []byte) error {
+		return tx.Bucket(bucketCrashMeta).ForEach(func(k, v []byte) error {
 			var cs CrashSummary
 			if err := json.Unmarshal(v, &cs); err != nil {
-				return nil // skip corrupt entries
+				log.Printf("BoltStore: corrupt crash entry %s: %v", string(k), err)
+				return nil
 			}
 			if opts.Severity != "" && !strings.EqualFold(cs.Severity, opts.Severity) {
 				return nil
@@ -493,6 +498,8 @@ func paginate[T any](all []T, opts ListOpts) *ListResult[T] {
 
 func generateStoreID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Printf("BoltStore: random ID generation failed: %v", err)
+	}
 	return hex.EncodeToString(b)
 }

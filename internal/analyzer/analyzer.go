@@ -16,26 +16,27 @@ const (
 	None          AttackType = "none"
 )
 
+// Package-level compiled regexes (compiled once at init, not per NewAnalyzer call)
+var (
+	sqliPattern    = regexp.MustCompile(`(?i)(union\s+select|or\s+1=1|\s+or\s+true|--|;\s*drop\s+table)`)
+	xssPattern     = regexp.MustCompile(`(?i)(<script|javascript:|on\w+=|alert\()`)
+	pathTravPattern = regexp.MustCompile(`\.\./\.\.`)
+	scannerPattern = regexp.MustCompile(`(?i)(nessus|nmap|nikto|sqlmap|burp)`)
+)
+
 type Analyzer struct {
-	sqliRegex    *regexp.Regexp
-	xssRegex     *regexp.Regexp
+	sqliRegex     *regexp.Regexp
+	xssRegex      *regexp.Regexp
 	pathTravRegex *regexp.Regexp
-	scannerRegex *regexp.Regexp
+	scannerRegex  *regexp.Regexp
 }
 
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{
-		// Basic SQLi patterns: UNION SELECT, OR 1=1, --, etc.
-		sqliRegex: regexp.MustCompile(`(?i)(union\s+select|or\s+1=1|\s+or\s+true|--|;\s*drop\s+table)`),
-		
-		// Basic XSS patterns: <script>, javascript:, on(event)=
-		xssRegex: regexp.MustCompile(`(?i)(<script|javascript:|on\w+=|alert\()`),
-
-		// Path Traversal: ../..
-		pathTravRegex: regexp.MustCompile(`\.\./\.\.`),
-
-		// Common Scanners User-Agents (simplified)
-		scannerRegex: regexp.MustCompile(`(?i)(nessus|nmap|nikto|sqlmap|burp)`),
+		sqliRegex:     sqliPattern,
+		xssRegex:      xssPattern,
+		pathTravRegex: pathTravPattern,
+		scannerRegex:  scannerPattern,
 	}
 }
 

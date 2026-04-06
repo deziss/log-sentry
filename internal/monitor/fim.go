@@ -58,7 +58,20 @@ func (f *FIM) checkAll() {
 	for _, path := range f.Paths {
 		info, err := os.Stat(path)
 		if err != nil {
-			// File gone?
+			if os.IsNotExist(err) {
+				if _, known := f.FileHashes[path]; known {
+					f.ChangeMetric.WithLabelValues(path, "critical").Inc()
+					delete(f.FileHashes, path)
+					if f.Alerter != nil {
+						f.Alerter.Send(
+							"File Integrity Violation",
+							fmt.Sprintf("Monitored file deleted: %s", path),
+							"CRITICAL",
+							"FIM",
+						)
+					}
+				}
+			}
 			continue
 		}
 		

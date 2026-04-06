@@ -144,9 +144,12 @@ func (c *Config) WatchConfig(callback func()) error {
 	err = watcher.Add(c.RulesPath)
 	if err != nil {
 		// Log but don't fail completely if rule file doesn't exist yet
-		log.Printf("Could not watch rules file: %v. Creating empty one.", err)
-		os.WriteFile(c.RulesPath, []byte(`{"ProcessBlacklist": ["nc", "nmap", "hydra", "john", "xmrig"]}`), 0644)
-		watcher.Add(c.RulesPath)
+		log.Printf("Could not watch rules file: %v. Creating default one.", err)
+		if writeErr := os.WriteFile(c.RulesPath, []byte(`{"ProcessBlacklist": ["nc", "nmap", "hydra", "john", "xmrig"]}`), 0644); writeErr != nil {
+			log.Printf("Failed to create rules file: %v", writeErr)
+		} else {
+			watcher.Add(c.RulesPath)
+		}
 	}
 	return nil
 }
